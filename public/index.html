@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UDISE+ Data Bot — Automated Student Data Updater</title>
+  <meta name="description" content="Automate student data updates on UDISE+ portal. Upload Excel sheets and let the bot handle the rest.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Animated background -->
+  <div class="bg-grid"></div>
+  <div class="bg-orbs">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <h1>UDISE+ Bot</h1>
+          <span>Automated Data Updater</span>
+        </div>
+      </div>
+      <div class="header-badge">
+        <span class="status-dot"></span>
+        <span id="connectionStatus">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main App -->
+  <main class="app-container">
+    <!-- Step Indicator -->
+    <div class="steps-indicator">
+      <div class="step active" data-step="1">
+        <div class="step-number">1</div>
+        <span>Upload Excel</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="2">
+        <div class="step-number">2</div>
+        <span>Login Details</span>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="3">
+        <div class="step-number">3</div>
+        <span>Run Bot</span>
+      </div>
+    </div>
+
+    <!-- Step 1: Upload -->
+    <section id="step1" class="step-section active">
+      <div class="card glass">
+        <div class="card-header">
+          <div class="card-icon upload-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="12" y1="18" x2="12" y2="12"/>
+              <polyline points="9 15 12 12 15 15"/>
+            </svg>
+          </div>
+          <div>
+            <h2>Upload Student Data</h2>
+            <p>Upload your Excel file (.xlsx, .xls) with student records</p>
+          </div>
+        </div>
+
+        <div class="upload-zone" id="dropZone">
+          <div class="upload-zone-content">
+            <div class="upload-animation">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <h3>Drag & Drop your Excel file here</h3>
+            <p>or click to browse</p>
+            <div class="upload-formats">
+              <span class="format-badge">.xlsx</span>
+              <span class="format-badge">.xls</span>
+              <span class="format-badge">.csv</span>
+            </div>
+          </div>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+        </div>
+
+        <!-- File info after upload -->
+        <div id="fileInfo" class="file-info hidden">
+          <div class="file-info-header">
+            <div class="file-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+            </div>
+            <div class="file-details">
+              <h4 id="fileName">filename.xlsx</h4>
+              <span id="fileRows">0 records found</span>
+            </div>
+            <button class="btn-icon" id="removeFile" title="Remove file">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+
+          <div id="fileWarning" class="alert alert-warn hidden">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span id="warningText"></span>
+          </div>
+
+          <!-- Preview table -->
+          <div class="table-container">
+            <h4 class="table-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+              Data Preview (first 5 rows)
+            </h4>
+            <div class="table-scroll">
+              <table id="previewTable">
+                <thead><tr id="previewHead"></tr></thead>
+                <tbody id="previewBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Column mapping -->
+        <div id="columnMapping" class="column-mapping hidden">
+          <h4>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
+            </svg>
+            Detected Column Mapping
+          </h4>
+          <div class="mapping-grid" id="mappingGrid"></div>
+        </div>
+
+        <div class="card-actions">
+          <button class="btn btn-primary" id="nextStep1" disabled>
+            Continue
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Excel Format Guide -->
+      <div class="card glass format-guide">
+        <h3>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          Expected Excel Format
+        </h3>
+        <div class="table-scroll">
+          <table class="format-table">
+            <thead>
+              <tr>
+                <th>Student Name</th>
+                <th>Class</th>
+                <th>PEN No</th>
+                <th>Attendance</th>
+                <th>Percentage</th>
+                <th>Progression Status</th>
+                <th>Studying in Same School</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Rahul Kumar</td>
+                <td>10</td>
+                <td>12345678</td>
+                <td>220</td>
+                <td>85.5</td>
+                <td>Promoted</td>
+                <td>Yes</td>
+              </tr>
+              <tr>
+                <td>Priya Sharma</td>
+                <td>10</td>
+                <td>87654321</td>
+                <td>195</td>
+                <td>72.3</td>
+                <td>Promoted</td>
+                <td>Yes</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 2: Credentials -->
+    <section id="step2" class="step-section">
+      <div class="card glass">
+        <div class="card-header">
+          <div class="card-icon login-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+          </div>
+          <div>
+            <h2>UDISE+ Login Credentials</h2>
+            <p>Enter your UDISE+ portal credentials to allow the bot to log in</p>
+          </div>
+        </div>
+
+        <form id="credentialsForm" class="form-grid">
+          <div class="form-group">
+            <label for="udiseCode">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              UDISE Code / Username
+            </label>
+            <input type="text" id="udiseCode" placeholder="Enter your UDISE Code" required autocomplete="username">
+          </div>
+
+          <div class="form-group">
+            <label for="password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              Password
+            </label>
+            <div class="input-group">
+              <input type="password" id="password" placeholder="Enter your password" required autocomplete="current-password">
+              <button type="button" class="btn-icon toggle-password" id="togglePassword">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="security-note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <span>Your credentials are used only for this session and are never stored on any server.</span>
+          </div>
+        </form>
+
+        <div class="card-actions dual">
+          <button class="btn btn-ghost" id="backStep2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+            </svg>
+            Back
+          </button>
+          <button class="btn btn-primary" id="nextStep2">
+            Start Automation
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: Automation Progress -->
+    <section id="step3" class="step-section">
+      <div class="card glass">
+        <div class="card-header">
+          <div class="card-icon bot-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="10" rx="2"/>
+              <circle cx="12" cy="5" r="3"/>
+              <line x1="12" y1="8" x2="12" y2="11"/>
+              <circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/>
+            </svg>
+          </div>
+          <div>
+            <h2>Automation in Progress</h2>
+            <p id="statusText">Initializing the bot...</p>
+          </div>
+        </div>
+
+        <!-- Progress Bar -->
+        <div class="progress-section">
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="progressBar" style="width: 0%">
+              <div class="progress-glow"></div>
+            </div>
+          </div>
+          <div class="progress-stats">
+            <span id="progressPercent">0%</span>
+            <span id="progressCount">0 / 0 students</span>
+          </div>
+        </div>
+
+        <!-- Current Student -->
+        <div class="current-student hidden" id="currentStudent">
+          <div class="pulse-dot"></div>
+          <span>Processing: <strong id="currentStudentName">—</strong></span>
+        </div>
+
+        <!-- CAPTCHA Alert -->
+        <div id="captchaAlert" class="alert alert-captcha hidden">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div>
+            <strong>CAPTCHA Detected!</strong>
+            <p>Please switch to the browser window and solve the CAPTCHA manually, then click Login.</p>
+          </div>
+        </div>
+
+        <!-- Results Summary -->
+        <div id="resultsSummary" class="results-summary hidden">
+          <div class="result-card success">
+            <div class="result-value" id="successCount">0</div>
+            <div class="result-label">Successful</div>
+          </div>
+          <div class="result-card failed">
+            <div class="result-value" id="failedCount">0</div>
+            <div class="result-label">Failed</div>
+          </div>
+          <div class="result-card total">
+            <div class="result-value" id="totalCount">0</div>
+            <div class="result-label">Total</div>
+          </div>
+        </div>
+
+        <!-- Log Console -->
+        <div class="log-section">
+          <div class="log-header">
+            <h4>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+              </svg>
+              Live Log
+            </h4>
+            <button class="btn-icon" id="clearLogs" title="Clear logs">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+            </button>
+          </div>
+          <div class="log-console" id="logConsole">
+            <div class="log-entry info">
+              <span class="log-time">--:--:--</span>
+              <span class="log-msg">Waiting to start...</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-actions">
+          <button class="btn btn-danger" id="stopBot">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
+            Stop Bot
+          </button>
+          <button class="btn btn-primary hidden" id="restartBot">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+              <polyline points="23 4 23 10 17 10"/>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+            </svg>
+            Start New Session
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>UDISE+ Data Bot &middot; Built for school administrators &middot; Not affiliated with UDISE+ or MHRD</p>
+  </footer>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
