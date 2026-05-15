@@ -175,16 +175,20 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
     log('🚀 Launching browser...');
 
     browser = await puppeteer.launch({
-      headless: false, // Set to true for production
+      headless: 'new',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       defaultViewport: { width: 1366, height: 768 },
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--single-process',
+        '--no-zygote',
         '--window-size=1366,768'
       ],
-      slowMo: 50 // Slow down actions slightly for stability
+      slowMo: 50
     });
 
     const page = await browser.newPage();
@@ -270,47 +274,53 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
     // Handle CAPTCHA if present
     const captchaExists = await page.$('canvas, img[src*="captcha"], .captcha, input[placeholder*="captcha"], input[placeholder*="Captcha"]');
     if (captchaExists) {
-      log('⚠️ CAPTCHA detected! Please solve it manually in the browser window.', 'warn');
-      emit('captcha', { message: 'CAPTCHA detected. Please solve it in the browser window and click Login.' });
-
-      // Wait for user to solve CAPTCHA and login (max 120 seconds)
+      log('⚠️ CAPTCHA detected! Sending screenshot to you...', 'warn');
       session.status = 'waiting_captcha';
       emit('progress', { step: 'waiting_captcha', percent: 12 });
 
-      try {
-        await page.waitForNavigation({ timeout: 120000, waitUntil: 'networkidle2' });
-        log('✅ CAPTCHA solved, navigating...');
-      } catch (e) {
-        // Try clicking login button first
-        const loginBtn = await page.$('button[type="submit"], button:has-text("Login"), .btn-login, button.login');
-        if (loginBtn) {
-          await loginBtn.click();
-          await page.waitForNavigation({ timeout: 30000, waitUntil: 'networkidle2' }).catch(() => {});
-        }
-      }
-    } else {
-      // Click login button
-      const loginSelectors = [
-        'button[type="submit"]',
-        'button.btn-primary',
-        'button.login-btn',
-        'input[type="submit"]',
-        'button'
+      // Take screenshot and send to frontend as base64
+      const screenshotBuffer = await page.screenshot({ encoding: 'base64' });
+      emit('captcha', { image: 'data:image/png;base64,' + screenshotBuffer });
+
+      // Wait for user to send CAPTCHA text back via socket
+      const captchaText = await waitForCaptchaAnswer(socket, 180000);
+      log(`📝 Received CAPTCHA answer: ${captchaText}`);
+
+      // Find and fill CAPTCHA input
+      const captchaInputSels = [
+        'input[placeholder*="captcha"]', 'input[placeholder*="Captcha"]',
+        'input[placeholder*="CAPTCHA"]', 'input[name*="captcha"]',
+        'input[id*="captcha"]', 'input[id*="Captcha"]'
       ];
+      let captchaField = null;
+      for (const sel of captchaInputSels) {
+        captchaField = await page.$(sel);
+        if (captchaField) break;
+      }
+      if (captchaField) {
+        await captchaField.click({ clickCount: 3 });
+        await captchaField.type(captchaText, { delay: 40 });
+      } else {
+        log('⚠️ Could not find CAPTCHA input field', 'warn');
+      }
+    }
 
-      for (const sel of loginSelectors) {
-        const btn = await page.$(sel);
-        if (btn) {
-          const text = await page.evaluate(el => el.textContent, btn);
-          if (text && (text.toLowerCase().includes('login') || text.toLowerCase().includes('sign in') || text.toLowerCase().includes('submit'))) {
-            await btn.click();
-            break;
-          }
+    // Click login button
+    const loginSelectors = [
+      'button[type="submit"]', 'button.btn-primary', 'button.login-btn',
+      'input[type="submit"]', 'button'
+    ];
+    for (const sel of loginSelectors) {
+      const btn = await page.$(sel);
+      if (btn) {
+        const text = await page.evaluate(el => el.textContent, btn);
+        if (text && (text.toLowerCase().includes('login') || text.toLowerCase().includes('sign in') || text.toLowerCase().includes('submit'))) {
+          await btn.click();
+          break;
         }
       }
-
-      await page.waitForTimeout(5000);
     }
+    await page.waitForTimeout(5000);
 
     // Check if login was successful
     const currentUrl = page.url();
@@ -733,6 +743,30 @@ async function saveRecord(page, log) {
 
   log('  ⚠️ Could not find save button', 'warn');
   return false;
+}
+
+// ========================
+// CAPTCHA HELPER
+// ========================
+
+function waitForCaptchaAnswer(socket, timeoutMs = 180000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('CAPTCHA answer timeout — no response within 3 minutes'));
+    }, timeoutMs);
+
+    const handler = (data) => {
+      clearTimeout(timer);
+      resolve(data.text || '');
+    };
+
+    if (socket) {
+      socket.once('captcha-answer', handler);
+    } else {
+      // Fallback: listen on all sockets
+      io.once('connection', (s) => s.once('captcha-answer', handler));
+    }
+  });
 }
 
 // ========================
