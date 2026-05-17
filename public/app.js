@@ -179,6 +179,22 @@ document.getElementById('btnRestart').addEventListener('click', () => {
   resetUpload(); goStep(1);
 });
 
+document.getElementById('copyLogsBtn').addEventListener('click', () => {
+  const body = document.getElementById('consoleBody');
+  const lines = body.querySelectorAll('.console-line');
+  const text = Array.from(lines).map(l => {
+    const time = l.querySelector('.cl-time')?.textContent || '';
+    const msg = l.querySelector('.cl-msg')?.textContent || '';
+    return `[${time}] ${msg}`;
+  }).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyLogsBtn');
+    const orig = btn.title;
+    btn.title = '✓ Copied!';
+    btn.style.color = '#4ade80';
+    setTimeout(() => { btn.title = orig; btn.style.color = ''; }, 2000);
+  }).catch(() => alert('Failed to copy logs'));
+});
 document.getElementById('clearLogsBtn').addEventListener('click', () => { document.getElementById('consoleBody').innerHTML = ''; });
 
 // ---- CAPTCHA Submit ----

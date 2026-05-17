@@ -82,8 +82,13 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
           normalized.penNo = String(value).trim();
         }
         // Attendance / No. of days school attended
-        else if (!normalized.attendance && (lowerKey.includes('attendance') || (lowerKey.includes('days') && lowerKey.includes('school')))) {
-          normalized.attendance = String(value).trim();
+        else if (lowerKey.includes('attend') || lowerKey.includes('present')) {
+          // Absolute priority to columns that explicitly say 'attend' or 'present'
+          normalized.attendance = String(value).split('.')[0].replace(/[^0-9]/g, '');
+        }
+        else if (!normalized.attendance && lowerKey.includes('day') && !lowerKey.includes('total') && !lowerKey.includes('working')) {
+          // Fallback to 'day' only if it's not 'total days' or 'working days'
+          normalized.attendance = String(value).split('.')[0].replace(/[^0-9]/g, '');
         }
         // Percentage
         else if (!normalized.percentage && (lowerKey.includes('percent') || lowerKey.includes('%'))) {
@@ -444,21 +449,38 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
     }
     await delay(5000);
 
-    // Check if login was successful based on URL
-    const currentUrl = page.url();
+    // Re-check URL to handle slow navigations
+    let currentUrl = page.url();
     log(`📍 Current URL: ${currentUrl}`);
 
     if (!currentUrl.includes('/home') && !currentUrl.includes('/school') && !currentUrl.includes('/academic-choice')) {
       // If we are still on the login page, check for actual error messages
       const errorElement = await page.$('.error-message, .alert-danger');
       if (errorElement) {
-        const errorText = await page.evaluate(el => el.textContent, errorElement);
-        if (errorText && errorText.trim()) {
-          log(`❌ Login error: ${errorText.trim()}`, 'error');
-          throw new Error(`Login failed: ${errorText.trim()}`);
+        try {
+          const errorText = await page.evaluate(el => el.textContent, errorElement);
+          if (errorText && errorText.trim()) {
+            log(`❌ Login error: ${errorText.trim()}`, 'error');
+            throw new Error(`Login failed: ${errorText.trim()}`);
+          }
+        } catch (err) {
+          if (err.message.includes('Execution context was destroyed')) {
+            log('⚠️ Page navigated while checking errors, proceeding...');
+            await delay(3000);
+            currentUrl = page.url();
+          } else {
+            throw err;
+          }
         }
       }
-      throw new Error(`Login failed. Redirected to unexpected URL: ${currentUrl}`);
+      
+      // Final check after potential slow navigation
+      if (!currentUrl.includes('/home') && !currentUrl.includes('/school') && !currentUrl.includes('/academic-choice')) {
+        currentUrl = page.url(); // One last check
+        if (!currentUrl.includes('/home') && !currentUrl.includes('/school') && !currentUrl.includes('/academic-choice')) {
+          throw new Error(`Login failed. Redirected to unexpected URL: ${currentUrl}`);
+        }
+      }
     }
 
     session.status = 'logged_in';
@@ -616,8 +638,15 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
       await page.goto(promotionUrl, { waitUntil: 'networkidle2', timeout: 30000 });
       await delay(3000);
 
-      // Select Class from dropdown
+      // Select Class from dropdown — wait for dropdowns to load first
       log(`🔍 Selecting Class: ${className}...`);
+      try {
+        await page.waitForSelector('select', { timeout: 10000 });
+        await delay(1000);
+      } catch (e) {
+        log('  ⚠️ Dropdowns slow to load, waiting extra...', 'warn');
+        await delay(5000);
+      }
       const classSelected = await selectDropdownOption(page, 'Select Class', className, log);
       if (!classSelected) {
         log(`❌ Could not select class "${className}", skipping this group`, 'error');
@@ -1027,20 +1056,58 @@ async function processStudentOnPage(page, student, log) {
 
     const info = { success: true, selectsCount: selects.length, inputsCount: dataInputs.length, filled: [] };
 
-    // Tag elements so Puppeteer can interact with them natively
-    if (selects.length > 0) selects[0].id = 'bot-progress-select';
-    if (selects.length > 1) selects[selects.length - 1].id = 'bot-school-select';
+    // Tag elements so Puppeteer can interact with them natively, using PEN to ensure uniqueness
+    if (selects.length > 0) selects[0].id = `bot-progress-select-${pen}`;
+    if (selects.length > 1) selects[selects.length - 1].id = `bot-school-select-${pen}`;
 
     let marksInput = null, percentInput = null, daysInput = null;
+    info.inputDebug = [];
     
-    // First, try matching by attributes (formControlName, placeholder, name, id)
-    dataInputs.forEach(inp => {
-      const attrs = [inp.name, inp.getAttribute('formcontrolname'), inp.placeholder, inp.id].join(' ').toLowerCase();
-      if (attrs.includes('attend') || attrs.includes('day')) {
+    // First, try matching by attributes (formControlName, placeholder, name, id) and nearest label
+    dataInputs.forEach((inp, idx) => {
+      // Get label text from closest label element only (not container text which is too broad)
+      let labelText = '';
+      // Walk up to find closest label - check siblings and parent containers
+      let parent = inp.parentElement;
+      for (let climb = 0; climb < 5 && parent; climb++) {
+        const labels = parent.querySelectorAll('label, span.label, .col-form-label, th');
+        for (const lbl of labels) {
+          const t = lbl.textContent.trim().toLowerCase();
+          if (t.length > 2 && t.length < 80) {
+            labelText = t;
+            break;
+          }
+        }
+        if (labelText) break;
+        parent = parent.parentElement;
+      }
+
+      const attrParts = [
+        inp.name || '',
+        inp.getAttribute('formcontrolname') || '',
+        inp.placeholder || '',
+        inp.id || ''
+      ];
+      const attrStr = attrParts.join(' ').toLowerCase();
+      const fullMatch = (attrStr + ' ' + labelText).toLowerCase();
+      
+      info.inputDebug.push({
+        index: idx,
+        name: inp.name,
+        formControlName: inp.getAttribute('formcontrolname'),
+        placeholder: inp.placeholder,
+        id: inp.id,
+        labelText: labelText,
+        currentValue: inp.value,
+        fullMatch: fullMatch
+      });
+
+      // Match by priority: explicit attribute first, then label text
+      if (fullMatch.includes('attend') || (fullMatch.includes('day') && !fullMatch.includes('total') && !fullMatch.includes('working'))) {
         daysInput = inp;
-      } else if (attrs.includes('percent') || attrs.includes('%') || attrs.includes('pcnt')) {
+      } else if (fullMatch.includes('percent') || fullMatch.includes('%') || fullMatch.includes('pcnt')) {
         percentInput = inp;
-      } else if (attrs.includes('mark') || attrs.includes('total') || attrs.includes('obtain')) {
+      } else if (fullMatch.includes('mark') || fullMatch.includes('total') || fullMatch.includes('obtain')) {
         marksInput = inp;
       }
     });
@@ -1057,14 +1124,14 @@ async function processStudentOnPage(page, student, log) {
       if (!percentInput) percentInput = dataInputs[0];
     }
 
-    if (marksInput) { marksInput.id = 'bot-marks-input'; info.hasMarksInput = true; }
-    if (percentInput) { percentInput.id = 'bot-percent-input'; info.hasPercentInput = true; }
-    if (daysInput) { daysInput.id = 'bot-days-input'; info.hasDaysInput = true; }
+    if (marksInput) { marksInput.id = `bot-marks-input-${pen}`; info.hasMarksInput = true; }
+    if (percentInput) { percentInput.id = `bot-percent-input-${pen}`; info.hasPercentInput = true; }
+    if (daysInput) { daysInput.id = `bot-days-input-${pen}`; info.hasDaysInput = true; }
 
     // Tag the update button
     const btnsInContainer = Array.from(studentContainer.querySelectorAll('button'));
     const updateBtn = btnsInContainer.find(b => b.textContent.trim().toLowerCase() === 'update');
-    if (updateBtn) updateBtn.id = 'bot-update-btn';
+    if (updateBtn) updateBtn.id = `bot-update-btn-${pen}`;
     info.hasUpdateBtn = !!updateBtn;
 
     // Determine values to select
@@ -1117,63 +1184,165 @@ async function processStudentOnPage(page, student, log) {
   }
 
   log(`  📊 Form fields: ${elementInfo.selectsCount} dropdowns, ${elementInfo.inputsCount} inputs`);
+  
+  // Log debug info about each input field detected
+  if (elementInfo.inputDebug) {
+    for (const d of elementInfo.inputDebug) {
+      log(`  🔎 Input[${d.index}]: formControlName="${d.formControlName}" name="${d.name}" placeholder="${d.placeholder}" label="${d.labelText}" currentVal="${d.currentValue}"`);
+    }
+  }
 
   // Use Puppeteer's native methods to interact with the tagged elements
   if (elementInfo.progressValue) {
-    await page.select('#bot-progress-select', elementInfo.progressValue);
+    await page.select(`#bot-progress-select-${student.penNo}`, elementInfo.progressValue);
     await delay(300);
   }
 
-  if (student.marks && elementInfo.hasMarksInput) {
-    await page.evaluate((val) => {
-      const el = document.getElementById('bot-marks-input');
-      if (el) {
-        el.value = '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
+  // Helper: Set input value with multiple strategies
+  async function setInputValue(selector, value, fieldName) {
+    const el = await page.$(selector);
+    if (!el) {
+      log(`  ⚠️ Could not find element ${selector} for ${fieldName}`, 'warn');
+      return false;
+    }
+
+    // Check element state and remove readonly/disabled if present
+    const elState = await page.evaluate(sel => {
+      const e = document.querySelector(sel);
+      if (!e) return { found: false };
+      const state = {
+        found: true,
+        type: e.type,
+        readOnly: e.readOnly,
+        disabled: e.disabled,
+        value: e.value
+      };
+      // Force element to be editable
+      e.readOnly = false;
+      e.disabled = false;
+      e.removeAttribute('readonly');
+      e.removeAttribute('disabled');
+      return state;
+    }, selector);
+
+    if (!elState.found) return false;
+    log(`  📝 ${fieldName}: type=${elState.type} readonly=${elState.readOnly} disabled=${elState.disabled} current="${elState.value}" → setting "${value}"`);
+
+    // STRATEGY 1: Focus + Select + Keyboard type (most Angular-compatible)
+    // Use evaluate to guarantee focus and text selection
+    await page.evaluate(sel => {
+      const e = document.querySelector(sel);
+      if (e) {
+        e.focus();
+        e.select(); // Native HTMLInputElement.select() — selects all text
       }
-    }, student.marks.toString());
-    elementInfo.filled.push('Marks: ' + student.marks);
+    }, selector);
+    await delay(200);
+
+    // Now type — this replaces the selected text with real keyboard events
+    await page.keyboard.press('Delete');
+    await delay(100);
+    await page.keyboard.type(value, { delay: 25 });
+    await delay(200);
+
+    // Blur via evaluate (NOT Tab — Tab causes focus to jump unpredictably)
+    await page.evaluate(sel => {
+      const e = document.querySelector(sel);
+      if (e) {
+        e.dispatchEvent(new Event('change', { bubbles: true }));
+        e.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    }, selector);
+    await delay(300);
+
+    // Verify
+    const actual = await page.evaluate(sel => {
+      const e = document.querySelector(sel);
+      return e ? e.value : null;
+    }, selector);
+
+    if (actual !== value) {
+      log(`  ⚠️ STRATEGY 1 failed for ${fieldName}: expected "${value}" got "${actual}", trying strategy 2...`, 'warn');
+
+      // STRATEGY 2: Native value setter + InputEvent
+      await page.evaluate((sel, val) => {
+        const e = document.querySelector(sel);
+        if (!e) return;
+        e.focus();
+        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        nativeSetter.call(e, val);
+        // Use InputEvent instead of Event — Angular may specifically listen for this type
+        e.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
+        e.dispatchEvent(new Event('change', { bubbles: true }));
+        e.dispatchEvent(new Event('blur', { bubbles: true }));
+      }, selector, value);
+      await delay(300);
+
+      const actual2 = await page.evaluate(sel => {
+        const e = document.querySelector(sel);
+        return e ? e.value : null;
+      }, selector);
+
+      if (actual2 !== value) {
+        log(`  ⚠️ STRATEGY 2 failed for ${fieldName}: expected "${value}" got "${actual2}", trying strategy 3...`, 'warn');
+
+        // STRATEGY 3: Clear with repeated backspace then type
+        await page.evaluate(sel => {
+          const e = document.querySelector(sel);
+          if (e) { e.focus(); e.select(); }
+        }, selector);
+        await delay(100);
+        // Press backspace multiple times to clear any existing value
+        for (let i = 0; i < 10; i++) {
+          await page.keyboard.press('Backspace');
+        }
+        await delay(100);
+        await page.keyboard.type(value, { delay: 25 });
+        await delay(200);
+        await page.evaluate(sel => {
+          const e = document.querySelector(sel);
+          if (e) {
+            e.dispatchEvent(new Event('change', { bubbles: true }));
+            e.dispatchEvent(new Event('blur', { bubbles: true }));
+          }
+        }, selector);
+        await delay(200);
+
+        const actual3 = await page.evaluate(sel => {
+          const e = document.querySelector(sel);
+          return e ? e.value : null;
+        }, selector);
+        if (actual3 !== value) {
+          log(`  ❌ ALL STRATEGIES FAILED for ${fieldName}: expected "${value}" got "${actual3}"`, 'error');
+        }
+      }
+    }
+
+    elementInfo.filled.push(`${fieldName}: ${value}`);
+    return true;
+  }
+
+  if (student.marks && elementInfo.hasMarksInput) {
+    await setInputValue(`#bot-marks-input-${student.penNo}`, student.marks.toString(), 'Marks');
     await delay(300);
   }
 
   if (student.percentage && elementInfo.hasPercentInput) {
-    await page.evaluate((val) => {
-      const el = document.getElementById('bot-percent-input');
-      if (el) {
-        el.value = '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-      }
-    }, student.percentage.toString());
-    elementInfo.filled.push('Percentage: ' + student.percentage);
+    // UDISE+ percentage field is integer-only — round and strip decimals
+    const pctValue = Math.round(parseFloat(student.percentage)).toString();
+    await setInputValue(`#bot-percent-input-${student.penNo}`, pctValue, 'Percentage');
     await delay(300);
   }
 
   if (student.attendance && elementInfo.hasDaysInput) {
-    await page.evaluate((val) => {
-      const el = document.getElementById('bot-days-input');
-      if (el) {
-        el.value = '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.value = val;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-      }
-    }, student.attendance.toString());
-    elementInfo.filled.push('Days Attended: ' + student.attendance);
+    // Ensure attendance is a clean integer string
+    const daysValue = String(student.attendance).split('.')[0].replace(/[^0-9]/g, '');
+    await setInputValue(`#bot-days-input-${student.penNo}`, daysValue, 'Days Attended');
     await delay(300);
   }
 
   if (elementInfo.schoolValue) {
-    await page.select('#bot-school-select', elementInfo.schoolValue);
+    await page.select(`#bot-school-select-${student.penNo}`, elementInfo.schoolValue);
     await delay(300);
   }
 
@@ -1186,7 +1355,7 @@ async function processStudentOnPage(page, student, log) {
   }
 
   log('  💾 Clicking Update button...');
-  await page.click('#bot-update-btn');
+  await page.click(`#bot-update-btn-${student.penNo}`);
   await delay(2000);
 
   // Check for success confirmation or alert
