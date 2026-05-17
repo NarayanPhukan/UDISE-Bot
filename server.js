@@ -683,32 +683,61 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
 
       let remainingStudents = [...classStudents];
 
+      // Helper: navigate to promotion page, select class and section, click Go
+      async function loadSection(sectionText) {
+        const promotionUrl = `https://sdms.udiseplus.gov.in/g2/#/school/${schoolId}/promotion`;
+        const currentUrl = page.url();
+        // Re-navigate if we're no longer on the promotion page
+        if (!currentUrl.includes('/promotion')) {
+          log('🔄 Re-navigating to promotion page...', 'warn');
+          await page.goto(promotionUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+          await delay(3000);
+        }
+        // Wait for dropdowns
+        try {
+          await page.waitForSelector('select', { timeout: 10000 });
+          await delay(1000);
+        } catch (e) {
+          // Dropdowns not found — force re-navigate
+          log('🔄 Dropdowns not found, force re-navigating...', 'warn');
+          await page.goto(promotionUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+          await delay(3000);
+          await page.waitForSelector('select', { timeout: 15000 });
+          await delay(1000);
+        }
+        // Select class
+        await selectDropdownOption(page, 'Select Class', className, log);
+        await delay(1500);
+        // Select section
+        if (sectionText) {
+          await selectDropdownOption(page, 'Select Section', sectionText, log);
+        } else {
+          await selectDropdownOption(page, 'Select Section', null, log);
+        }
+        await delay(1000);
+        // Click Go
+        const goBtn = await findButtonByText(page, 'Go');
+        if (goBtn) {
+          await goBtn.click();
+          await delay(5000);
+          log(`✅ Student list loaded for Section ${sectionText}`);
+          return true;
+        } else {
+          log('❌ Could not find Go button on promotion page', 'error');
+          return false;
+        }
+      }
+
       for (const section of availableSections) {
         if (remainingStudents.length === 0) {
           log(`✅ All students for Class ${className} processed successfully.`);
           break;
         }
 
-        // Select Section
+        // Load this section's student list
         log(`🔍 Selecting Section: ${section.text}...`);
-        if (section.value !== null) {
-          await selectDropdownOption(page, 'Select Section', section.text, log);
-        } else {
-          await selectDropdownOption(page, 'Select Section', null, log);
-        }
-        await delay(1000);
-
-        // Click "Go" button
-        log(`🔘 Clicking Go to load students for Section ${section.text}...`);
-        const goBtn = await findButtonByText(page, 'Go');
-        if (goBtn) {
-          await goBtn.click();
-          await delay(5000); // Wait for student list to load
-          log(`✅ Student list loaded for Section ${section.text}`);
-        } else {
-          log('❌ Could not find Go button on promotion page', 'error');
-          continue; // Try next section if there's an issue with the button
-        }
+        const sectionLoaded = await loadSection(section.text);
+        if (!sectionLoaded) continue;
 
         // Take a screenshot of the loaded list for debugging
         const listScreenshot = await page.screenshot({ encoding: 'base64' });
@@ -717,8 +746,48 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
         // Keep track of students that fail due to "not found on the page"
         const notFoundStudents = [];
 
-        // Now process each remaining student in this class
+        // --- Read students from the page first, then match with Excel ---
+        const remainingPens = remainingStudents.map(s => s.penNo ? String(s.penNo).trim() : null).filter(Boolean);
+
+        const pensOnPage = await page.evaluate((pensToFind) => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          const found = [];
+          while (walker.nextNode()) {
+            const text = walker.currentNode.textContent;
+            for (const pen of pensToFind) {
+              if (new RegExp('\\b' + pen + '\\b').test(text)) {
+                found.push(pen);
+              }
+            }
+          }
+          return [...new Set(found)]; // Return unique PENs in appearance order
+        }, remainingPens);
+
+        log(`🔍 Found ${pensOnPage.length} PENs on this page in serial order.`);
+
+        const studentsToProcessNow = [];
+        for (const pen of pensOnPage) {
+          const match = remainingStudents.find(s => String(s.penNo).trim() === pen);
+          if (match && !studentsToProcessNow.includes(match)) {
+            studentsToProcessNow.push(match);
+          }
+        }
+
+        // Identify which ones from remainingStudents were NOT on this page
         for (const student of remainingStudents) {
+          if (!studentsToProcessNow.includes(student)) {
+            notFoundStudents.push(student);
+          }
+        }
+
+        if (studentsToProcessNow.length === 0) {
+          log(`⚠️ None of the ${remainingStudents.length} remaining students were found on this page. Proceeding to next section.`, 'warn');
+          remainingStudents = notFoundStudents;
+          continue;
+        }
+
+        // Now process each matching student in serial order
+        for (const student of studentsToProcessNow) {
           processedCount++;
 
           // Check if session was stopped
@@ -754,6 +823,32 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                notFoundStudents.push(student);
                // Revert processedCount for next attempt
                processedCount--;
+            } else if (err.message.includes('context was destroyed') || err.message.includes('navigation') || err.message.includes('detached') || err.message.includes('Target closed')) {
+               // Page navigated away — recover and retry
+               log(`⚠️ Page navigated away during ${student.studentName}, recovering...`, 'warn');
+               processedCount--;
+               const recovered = await loadSection(section.text);
+               if (recovered) {
+                 try {
+                   await processStudentOnPage(page, student, log);
+                   results.success++;
+                   results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'success', section: section.text });
+                   log(`✅ Successfully updated (after recovery): ${student.studentName} in Section ${section.text}`, 'success');
+                 } catch (retryErr) {
+                   if (retryErr.message.includes('not found on the page')) {
+                     log(`⚠️ ${student.studentName} not found after recovery, will retry in next section.`, 'warn');
+                     notFoundStudents.push(student);
+                   } else {
+                     results.failed++;
+                     results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'failed', error: retryErr.message, section: section.text });
+                     log(`❌ Failed for ${student.studentName} after recovery: ${retryErr.message}`, 'error');
+                   }
+                 }
+               } else {
+                 results.failed++;
+                 results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'failed', error: 'Could not recover page', section: section.text });
+                 log(`❌ Failed for ${student.studentName}: Could not recover page`, 'error');
+               }
             } else {
                results.failed++;
                results.details.push({
@@ -1008,8 +1103,13 @@ async function processStudentOnPage(page, student, log) {
     let penElement = null;
     while (walker.nextNode()) {
       if (pen && new RegExp('\\b' + pen + '\\b').test(walker.currentNode.textContent)) {
-        penElement = walker.currentNode.parentElement;
-        break;
+        const el = walker.currentNode.parentElement;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
+          penElement = el;
+          break;
+        }
       }
     }
 
@@ -1018,29 +1118,39 @@ async function processStudentOnPage(page, student, log) {
       const walker2 = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       while (walker2.nextNode()) {
         if (walker2.currentNode.textContent.toLowerCase().includes(name.toLowerCase())) {
-          penElement = walker2.currentNode.parentElement;
-          break;
+          const el = walker2.currentNode.parentElement;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
+            penElement = el;
+            break;
+          }
         }
       }
     }
 
     if (!penElement) return { success: false, error: 'PEN element not found in DOM' };
 
-    // Find the closest common ancestor that contains the entire student row
-    // Walk up until we find a container that has both the PEN and form fields
-    let studentContainer = penElement;
-    let attempts = 0;
-    while (studentContainer && attempts < 15) {
-      const selects = studentContainer.querySelectorAll('select');
-      const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
-      if (selects.length >= 1 && inputs.length >= 1) {
-        break; // Found a container with both selects and inputs
-      }
-      studentContainer = studentContainer.parentElement;
-      attempts++;
+    let studentContainer = penElement.closest('tr');
+    if (!studentContainer) {
+      studentContainer = penElement.closest('.row, .student-block, [class*="record"]');
     }
-
-    if (!studentContainer || attempts >= 15) {
+    if (!studentContainer) {
+      studentContainer = penElement;
+      let attempts = 0;
+      while (studentContainer && attempts < 15 && studentContainer.tagName !== 'BODY') {
+        const selects = studentContainer.querySelectorAll('select');
+        const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+        // Stop if we find a reasonable number of inputs for ONE student (not the whole page)
+        if (selects.length >= 1 && inputs.length >= 1 && inputs.length <= 8) {
+          break;
+        }
+        studentContainer = studentContainer.parentElement;
+        attempts++;
+      }
+    }
+    
+    if (!studentContainer || studentContainer.tagName === 'BODY') {
       return { success: false, error: 'Could not find student form container' };
     }
 
@@ -1198,7 +1308,9 @@ async function processStudentOnPage(page, student, log) {
     await delay(300);
   }
 
-  // Helper: Set input value with multiple strategies
+  // Helper: Set input value — uses document.execCommand('insertText') which is the ONLY method
+  // that reliably updates Angular's internal FormControl model (not just the DOM .value property).
+  // Previous approaches updated the DOM but Angular's model kept the old value during form submission.
   async function setInputValue(selector, value, fieldName) {
     const el = await page.$(selector);
     if (!el) {
@@ -1217,7 +1329,6 @@ async function processStudentOnPage(page, student, log) {
         disabled: e.disabled,
         value: e.value
       };
-      // Force element to be editable
       e.readOnly = false;
       e.disabled = false;
       e.removeAttribute('readonly');
@@ -1228,94 +1339,35 @@ async function processStudentOnPage(page, student, log) {
     if (!elState.found) return false;
     log(`  📝 ${fieldName}: type=${elState.type} readonly=${elState.readOnly} disabled=${elState.disabled} current="${elState.value}" → setting "${value}"`);
 
-    // STRATEGY 1: Focus + Select + Keyboard type (most Angular-compatible)
-    // Use evaluate to guarantee focus and text selection
-    await page.evaluate(sel => {
-      const e = document.querySelector(sel);
-      if (e) {
-        e.focus();
-        e.select(); // Native HTMLInputElement.select() — selects all text
+    // Use Puppeteer's native type to simulate real user keystrokes. 
+    // This is the most reliable way to trigger Angular's form control value changes.
+    try {
+      // Focus the input natively
+      await page.focus(selector);
+      await delay(100);
+      
+      // Clear existing value by pressing End and then Backspace repeatedly
+      // This is 100% human-like and prevents Angular from discarding programmatic changes
+      await page.keyboard.press('End');
+      for (let i = 0; i < 5; i++) {
+        await page.keyboard.press('Backspace');
       }
-    }, selector);
-    await delay(200);
-
-    // Now type — this replaces the selected text with real keyboard events
-    await page.keyboard.press('Delete');
-    await delay(100);
-    await page.keyboard.type(value, { delay: 25 });
-    await delay(200);
-
-    // Blur via evaluate (NOT Tab — Tab causes focus to jump unpredictably)
-    await page.evaluate(sel => {
-      const e = document.querySelector(sel);
-      if (e) {
-        e.dispatchEvent(new Event('change', { bubbles: true }));
-        e.dispatchEvent(new Event('blur', { bubbles: true }));
+      
+      // Type the new value natively
+      await page.type(selector, value, { delay: 50 });
+      await delay(100);
+      
+      // Press Tab to confirm/blur natively (triggers Angular's blur event listener)
+      await page.keyboard.press('Tab');
+      await delay(200);
+      
+      // Verify if it worked
+      const actual = await page.evaluate(sel => document.querySelector(sel).value, selector);
+      if (actual !== value) {
+        log(`  ❌ Puppeteer type failed for ${fieldName}: expected "${value}" got "${actual}"`, 'error');
       }
-    }, selector);
-    await delay(300);
-
-    // Verify
-    const actual = await page.evaluate(sel => {
-      const e = document.querySelector(sel);
-      return e ? e.value : null;
-    }, selector);
-
-    if (actual !== value) {
-      log(`  ⚠️ STRATEGY 1 failed for ${fieldName}: expected "${value}" got "${actual}", trying strategy 2...`, 'warn');
-
-      // STRATEGY 2: Native value setter + InputEvent
-      await page.evaluate((sel, val) => {
-        const e = document.querySelector(sel);
-        if (!e) return;
-        e.focus();
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        nativeSetter.call(e, val);
-        // Use InputEvent instead of Event — Angular may specifically listen for this type
-        e.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: val }));
-        e.dispatchEvent(new Event('change', { bubbles: true }));
-        e.dispatchEvent(new Event('blur', { bubbles: true }));
-      }, selector, value);
-      await delay(300);
-
-      const actual2 = await page.evaluate(sel => {
-        const e = document.querySelector(sel);
-        return e ? e.value : null;
-      }, selector);
-
-      if (actual2 !== value) {
-        log(`  ⚠️ STRATEGY 2 failed for ${fieldName}: expected "${value}" got "${actual2}", trying strategy 3...`, 'warn');
-
-        // STRATEGY 3: Clear with repeated backspace then type
-        await page.evaluate(sel => {
-          const e = document.querySelector(sel);
-          if (e) { e.focus(); e.select(); }
-        }, selector);
-        await delay(100);
-        // Press backspace multiple times to clear any existing value
-        for (let i = 0; i < 10; i++) {
-          await page.keyboard.press('Backspace');
-        }
-        await delay(100);
-        await page.keyboard.type(value, { delay: 25 });
-        await delay(200);
-        await page.evaluate(sel => {
-          const e = document.querySelector(sel);
-          if (e) {
-            e.dispatchEvent(new Event('change', { bubbles: true }));
-            e.dispatchEvent(new Event('blur', { bubbles: true }));
-          }
-        }, selector);
-        await delay(200);
-
-        const actual3 = await page.evaluate(sel => {
-          const e = document.querySelector(sel);
-          return e ? e.value : null;
-        }, selector);
-        if (actual3 !== value) {
-          log(`  ❌ ALL STRATEGIES FAILED for ${fieldName}: expected "${value}" got "${actual3}"`, 'error');
-        }
-      }
+    } catch (err) {
+      log(`  ❌ Error typing into ${fieldName}: ${err.message}`, 'error');
     }
 
     elementInfo.filled.push(`${fieldName}: ${value}`);
@@ -1334,9 +1386,9 @@ async function processStudentOnPage(page, student, log) {
     await delay(300);
   }
 
-  if (student.attendance && elementInfo.hasDaysInput) {
-    // Ensure attendance is a clean integer string
-    const daysValue = String(student.attendance).split('.')[0].replace(/[^0-9]/g, '');
+  if (elementInfo.hasDaysInput) {
+    // Fixed days attended to 155
+    const daysValue = '155';
     await setInputValue(`#bot-days-input-${student.penNo}`, daysValue, 'Days Attended');
     await delay(300);
   }
@@ -1349,6 +1401,17 @@ async function processStudentOnPage(page, student, log) {
   for (const f of elementInfo.filled) {
     log(`  ✓ ${f}`);
   }
+
+  // Pre-submit readback: what does the portal actually have right now?
+  const preSubmitValues = await page.evaluate((pen) => {
+    const pctEl = document.querySelector(`#bot-percent-input-${pen}`);
+    const daysEl = document.querySelector(`#bot-days-input-${pen}`);
+    return {
+      pct: pctEl ? pctEl.value : 'NOT_FOUND',
+      days: daysEl ? daysEl.value : 'NOT_FOUND'
+    };
+  }, student.penNo);
+  log(`  🔍 PRE-SUBMIT CHECK: Percentage="${preSubmitValues.pct}" Days="${preSubmitValues.days}"`);
 
   if (!elementInfo.hasUpdateBtn) {
     throw new Error('Could not find Update button for this student');

@@ -31,7 +31,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .brand-logo svg{width:22px;height:22px;position:relative;z-index:1}
 .logo-ring{position:absolute;inset:-3px;border-radius:14px;border:1.5px solid rgba(91,140,255,0.3);animation:ringPulse 3s ease-in-out infinite}
 @keyframes ringPulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:.7;transform:scale(1.08)}}
-.brand-text h1{font-size:17px;font-weight:800;letter-spacing:1.5px;background:linear-gradient(135deg,var(--primary),var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.brand-text h1{font-size:17px;font-weight:800;letter-spacing:1.5px;background:linear-gradient(135deg,var(--primary),var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .brand-text span{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:2px;font-weight:500}
 .connection-badge{display:flex;align-items:center;gap:8px;padding:5px 14px;border-radius:20px;font-size:11px;font-weight:600;color:var(--accent);background:rgba(0,223,162,0.08);border:1px solid rgba(0,223,162,0.18)}
 .conn-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent);animation:blink 2s ease-in-out infinite}
