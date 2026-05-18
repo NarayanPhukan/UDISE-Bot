@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-socketio
+python-multipart
+pandas
+openpyxl
+playwright
+aiofiles

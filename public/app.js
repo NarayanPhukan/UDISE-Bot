@@ -16,6 +16,54 @@ function initSocket() {
     document.getElementById('captchaInput').value = '';
     document.getElementById('captchaInput').focus();
   });
+  socket.on('confirm-student', (data) => {
+    const modal = document.getElementById('confirmModal');
+    modal.classList.remove('hidden');
+    
+    document.getElementById('confName').textContent = data.studentName || '—';
+    document.getElementById('confClass').textContent = data.class || '—';
+    document.getElementById('confPen').textContent = data.penNo || '—';
+    
+    document.getElementById('confMarks').value = data.marks || '';
+    document.getElementById('confPercent').value = data.percentage || '';
+    document.getElementById('confDays').value = data.attendance || '155';
+    
+    const progSelect = document.getElementById('confProgression');
+    if (data.progressionStatus) {
+      const status = String(data.progressionStatus).toLowerCase();
+      if (status.includes('fail') || status.includes('not')) {
+        progSelect.value = 'Not Promoted';
+      } else if (status.includes('without')) {
+        progSelect.value = 'Promoted Without Examination';
+      } else if (status.includes('discontinued') || status.includes('before')) {
+        progSelect.value = 'Discontinued Before Examination';
+      } else {
+        progSelect.value = 'Promoted';
+      }
+    } else {
+      progSelect.value = 'Promoted';
+    }
+    
+    const schoolSelect = document.getElementById('confSameSchool');
+    if (data.sameSchool) {
+      const school = String(data.sameSchool).toLowerCase();
+      if (school.includes('left') || school.includes('tc')) {
+        schoolSelect.value = 'Left School with TC / Without TC';
+      } else {
+        schoolSelect.value = 'Studying in Same School';
+      }
+    } else {
+      schoolSelect.value = 'Studying in Same School';
+    }
+    
+    const imgContainer = document.getElementById('confirmScreenshotContainer');
+    if (data.screenshot) {
+      imgContainer.classList.remove('hidden');
+      document.getElementById('confirmImg').src = data.screenshot;
+    } else {
+      imgContainer.classList.add('hidden');
+    }
+  });
   socket.on('complete', showResults);
   socket.on('error', (d) => {
     addLog({ message: 'Error: ' + d.message, type: 'error', timestamp: new Date().toISOString() });
@@ -149,10 +197,17 @@ document.getElementById('btnStartBot').addEventListener('click', async () => {
   try {
     const res = await fetch(API + '/api/start-automation', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ socketId: socket.id, udiseCode: code, password: pass, data: uploadedData.data, filePath: uploadedData.filePath })
+      body: JSON.stringify({ 
+        socketId: socket.id, 
+        udiseCode: code, 
+        password: pass, 
+        data: uploadedData.data,
+        filePath: uploadedData.filePath,
+        semiAutomatic: document.getElementById('semiAutomatic').checked
+      })
     });
     const r = await res.json();
-    if (!res.ok) throw new Error(r.error);
+    if (!res.ok) throw new Error(r.message || r.error || 'Failed to start');
     sessionId = r.sessionId;
   } catch (err) { addLog({ message: 'Start failed: ' + err.message, type: 'error', timestamp: new Date().toISOString() }); }
 });
@@ -208,6 +263,32 @@ function submitCaptcha() {
 document.getElementById('captchaSubmitBtn').addEventListener('click', submitCaptcha);
 document.getElementById('captchaInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCaptcha(); });
 
+// ---- Student Confirmation Submit ----
+function submitStudentConfirmation(action) {
+  if (action === 'skip') {
+    socket.emit('confirm-student-response', { action: 'skip' });
+  } else {
+    const marks = document.getElementById('confMarks').value.trim();
+    const percentage = document.getElementById('confPercent').value.trim();
+    const attendance = document.getElementById('confDays').value.trim();
+    const progressionStatus = document.getElementById('confProgression').value;
+    const sameSchool = document.getElementById('confSameSchool').value;
+    
+    socket.emit('confirm-student-response', {
+      action: 'submit',
+      marks,
+      percentage,
+      attendance,
+      progressionStatus,
+      sameSchool
+    });
+  }
+  document.getElementById('confirmModal').classList.add('hidden');
+}
+
+document.getElementById('confirmSubmitBtn').addEventListener('click', () => submitStudentConfirmation('submit'));
+document.getElementById('confirmSkipBtn').addEventListener('click', () => submitStudentConfirmation('skip'));
+
 // ---- Progress ----
 function updateProgress(d) {
   document.getElementById('progressBar').style.width = d.percent + '%';
@@ -246,3 +327,75 @@ function showResults(r) {
 
 // ---- Init ----
 initSocket();
+initParticles();
+
+// ---- Premium Particle Background ----
+function initParticles() {
+  const canvas = document.getElementById('particlesCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  
+  let width = canvas.width = window.innerWidth;
+  let height = canvas.height = window.innerHeight;
+  
+  const particles = [];
+  const maxParticles = 60;
+  
+  class Particle {
+    constructor() {
+      this.reset();
+    }
+    
+    reset() {
+      this.x = Math.random() * width;
+      this.y = Math.random() * height + Math.random() * 100;
+      this.size = Math.random() * 1.8 + 0.6;
+      this.speedY = -(Math.random() * 0.4 + 0.15);
+      this.speedX = Math.random() * 0.2 - 0.1;
+      this.alpha = Math.random() * 0.4 + 0.1;
+      this.hue = Math.random() > 0.5 ? 215 : 275; // Ambient blue or purple
+    }
+    
+    update() {
+      this.y += this.speedY;
+      this.x += this.speedX;
+      if (this.y < -10) {
+        this.reset();
+        this.y = height + 10;
+      }
+    }
+    
+    draw() {
+      ctx.save();
+      ctx.globalAlpha = this.alpha;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${this.hue}, 100%, 70%, ${this.alpha})`;
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, 0.8)`;
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  
+  for (let i = 0; i < maxParticles; i++) {
+    particles.push(new Particle());
+    particles[i].y = Math.random() * height;
+  }
+  
+  window.addEventListener('resize', () => {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+  });
+  
+  function animate() {
+    ctx.clearRect(0, 0, width, height);
+    for (let p of particles) {
+      p.update();
+      p.draw();
+    }
+    requestAnimationFrame(animate);
+  }
+  
+  animate();
+}

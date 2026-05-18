@@ -143,7 +143,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
 // Start automation
 app.post('/api/start-automation', (req, res) => {
-  const { socketId, udiseCode, password, data, filePath, semiAutomatic } = req.body;
+  const { socketId, udiseCode, password, data, filePath } = req.body;
 
   if (!udiseCode || !password || !data || data.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -153,7 +153,7 @@ app.post('/api/start-automation', (req, res) => {
   activeSessions.set(sessionId, { status: 'starting', progress: 0 });
 
   // Start automation in background
-  runAutomation(sessionId, socketId, udiseCode, password, data, filePath, semiAutomatic);
+  runAutomation(sessionId, socketId, udiseCode, password, data, filePath);
 
   res.json({ success: true, sessionId });
 });
@@ -184,7 +184,7 @@ app.get('/api/status/:sessionId', (req, res) => {
 // BROWSER AUTOMATION
 // ========================
 
-async function runAutomation(sessionId, socketId, udiseCode, password, students, filePath, semiAutomatic = false) {
+async function runAutomation(sessionId, socketId, udiseCode, password, students, filePath) {
   const socket = io.sockets.sockets.get(socketId);
   const session = activeSessions.get(sessionId);
   let browser = null;
@@ -747,17 +747,31 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
         const notFoundStudents = [];
 
         // --- Read students from the page first, then match with Excel ---
-        const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
+        const remainingPens = remainingStudents.map(s => s.penNo ? String(s.penNo).trim() : null).filter(Boolean);
+
+        const pensOnPage = await page.evaluate((pensToFind) => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          const found = [];
+          while (walker.nextNode()) {
+            const text = walker.currentNode.textContent;
+            for (const pen of pensToFind) {
+              if (new RegExp('\\b' + pen + '\\b').test(text)) {
+                found.push(pen);
+              }
+            }
+          }
+          return [...new Set(found)]; // Return unique PENs in appearance order
+        }, remainingPens);
+
+        log(`🔍 Found ${pensOnPage.length} PENs on this page in serial order.`);
 
         const studentsToProcessNow = [];
-        for (const student of remainingStudents) {
-          const nameVal = student.studentName ? String(student.studentName).trim().toLowerCase() : null;
-          if (nameVal && pageText.includes(nameVal)) {
-            studentsToProcessNow.push(student);
+        for (const pen of pensOnPage) {
+          const match = remainingStudents.find(s => String(s.penNo).trim() === pen);
+          if (match && !studentsToProcessNow.includes(match)) {
+            studentsToProcessNow.push(match);
           }
         }
-        
-        log(`🔍 Found ${studentsToProcessNow.length} matching students on this page by name.`);
 
         // Identify which ones from remainingStudents were NOT on this page
         for (const student of remainingStudents) {
@@ -793,7 +807,7 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
           });
 
           try {
-            await processStudentOnPage(page, student, log, socket, semiAutomatic);
+            await processStudentOnPage(page, student, log);
             results.success++;
             results.details.push({
               row: student.rowIndex,
@@ -804,7 +818,7 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
             });
             log(`✅ Successfully updated: ${student.studentName} in Section ${section.text}`, 'success');
           } catch (err) {
-            if (err.message.includes('not found on the page') || err.message.includes('not found') || err.message.includes('not found in DOM')) {
+            if (err.message.includes('not found on the page')) {
                log(`⚠️ ${student.studentName} not found in Section ${section.text}, will retry in next section.`, 'warn');
                notFoundStudents.push(student);
                // Revert processedCount for next attempt
@@ -816,12 +830,12 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                const recovered = await loadSection(section.text);
                if (recovered) {
                  try {
-                   await processStudentOnPage(page, student, log, socket, semiAutomatic);
+                   await processStudentOnPage(page, student, log);
                    results.success++;
                    results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'success', section: section.text });
                    log(`✅ Successfully updated (after recovery): ${student.studentName} in Section ${section.text}`, 'success');
                  } catch (retryErr) {
-                   if (retryErr.message.includes('not found on the page') || retryErr.message.includes('not found') || retryErr.message.includes('not found in DOM')) {
+                   if (retryErr.message.includes('not found on the page')) {
                      log(`⚠️ ${student.studentName} not found after recovery, will retry in next section.`, 'warn');
                      notFoundStudents.push(student);
                    } else {
@@ -1028,22 +1042,83 @@ async function selectDropdownOption(page, labelText, targetValue, log) {
  * The page shows all students in the class — find this student's row by PEN,
  * fill in the form fields within that row, and click Update.
  */
-async function processStudentOnPage(page, student, log, socket, semiAutomatic = false) {
-  const studentName = student.studentName ? String(student.studentName).trim() : '';
-  if (!studentName) throw new Error('No name provided to identify this student');
-  
-  const rawPen = student.penNo ? String(student.penNo).trim() : '';
-  const pen = rawPen ? rawPen : studentName.replace(/[^a-zA-Z0-9]/g, '');
+async function processStudentOnPage(page, student, log) {
+  const penNo = student.penNo ? student.penNo.toString().trim() : '';
+  const studentName = student.studentName ? student.studentName.trim() : '';
+
+  if (!penNo && !studentName) {
+    throw new Error('No PEN or name to identify this student');
+  }
+
+  // Find the student's row/section on the page by PEN number
+  // The page structure has student blocks with PEN displayed
+  const studentIndex = await page.evaluate((pen, name) => {
+    // Look for all student blocks on the page
+    // Each student section contains their PEN and name
+    const allText = document.body.innerText;
+
+    // Find containers that hold individual student records
+    // Try common container patterns
+    const containers = document.querySelectorAll('tr, .card, .student-block, .row, [class*="student"], [class*="record"]');
+
+    // First, try to find by PEN in structured containers
+    for (let i = 0; i < containers.length; i++) {
+      const text = containers[i].textContent;
+      if (pen && new RegExp('\\b' + pen + '\\b').test(text)) {
+        return { found: true, containerIndex: i, selector: 'structured' };
+      }
+    }
+
+    // Fallback: search in the raw page text for PEN
+    if (pen && new RegExp('\\b' + pen + '\\b').test(allText)) {
+      return { found: true, containerIndex: -1, selector: 'rawtext' };
+    }
+
+    // Try by name
+    if (name) {
+      const nameLower = name.toLowerCase();
+      for (let i = 0; i < containers.length; i++) {
+        if (containers[i].textContent.toLowerCase().includes(nameLower)) {
+          return { found: true, containerIndex: i, selector: 'name' };
+        }
+      }
+    }
+
+    return { found: false };
+  }, penNo, studentName);
+
+  if (!studentIndex.found) {
+    throw new Error(`Student with PEN ${penNo} (${studentName}) not found on the page`);
+  }
+
+  log(`  🔍 Found student on page (method: ${studentIndex.selector})`);
+
+  // Strategy: Find ALL select dropdowns and input fields on the page,
+  // group them by proximity to the PEN text, and fill the correct ones.
+  // Each student row has: Progression Status (select), Marks % (input), Days (input), Schooling Status (select)
 
   const elementInfo = await page.evaluate((pen, name, progressionStatus, sameSchool) => {
+    // Find the element containing the PEN number
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let penElement = null;
-    if (name) {
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      const searchName = name.toLowerCase();
-      while (walker.nextNode()) {
-        const nodeText = walker.currentNode.textContent.toLowerCase();
-        if (nodeText.trim() === searchName || (nodeText.includes(searchName) && nodeText.length < 100)) {
-          const el = walker.currentNode.parentElement;
+    while (walker.nextNode()) {
+      if (pen && new RegExp('\\b' + pen + '\\b').test(walker.currentNode.textContent)) {
+        const el = walker.currentNode.parentElement;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
+          penElement = el;
+          break;
+        }
+      }
+    }
+
+    if (!penElement && name) {
+      // Try finding by name
+      const walker2 = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker2.nextNode()) {
+        if (walker2.currentNode.textContent.toLowerCase().includes(name.toLowerCase())) {
+          const el = walker2.currentNode.parentElement;
           const style = window.getComputedStyle(el);
           const rect = el.getBoundingClientRect();
           if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
@@ -1054,7 +1129,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       }
     }
 
-    if (!penElement) return { success: false, error: 'Student element not found in DOM' };
+    if (!penElement) return { success: false, error: 'PEN element not found in DOM' };
 
     let studentContainer = penElement.closest('tr');
     if (!studentContainer) {
@@ -1078,8 +1153,6 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     if (!studentContainer || studentContainer.tagName === 'BODY') {
       return { success: false, error: 'Could not find student form container' };
     }
-
-    studentContainer.id = 'bot-student-container-' + pen;
 
     // Now identify the fields within this container
     const selects = studentContainer.querySelectorAll('select');
@@ -1165,15 +1238,11 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     if (percentInput) { percentInput.id = `bot-percent-input-${pen}`; info.hasPercentInput = true; }
     if (daysInput) { daysInput.id = `bot-days-input-${pen}`; info.hasDaysInput = true; }
 
-    // Tag the update and correction buttons
-    const btnsInContainer = Array.from(studentContainer.querySelectorAll('button, a.btn, input[type="button"]'));
+    // Tag the update button
+    const btnsInContainer = Array.from(studentContainer.querySelectorAll('button'));
     const updateBtn = btnsInContainer.find(b => b.textContent.trim().toLowerCase() === 'update');
     if (updateBtn) updateBtn.id = `bot-update-btn-${pen}`;
     info.hasUpdateBtn = !!updateBtn;
-
-    const correctionBtn = btnsInContainer.find(b => b.textContent.trim().toLowerCase() === 'correction');
-    if (correctionBtn) correctionBtn.id = `bot-correction-btn-${pen}`;
-    info.hasCorrectionBtn = !!correctionBtn;
 
     // Determine values to select
     if (progressionStatus && selects.length > 0) {
@@ -1218,7 +1287,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     }
 
     return info;
-  }, pen, studentName, student.progressionStatus || '', student.sameSchool || '');
+  }, penNo, studentName, student.progressionStatus || '', student.sameSchool || '');
 
   if (!elementInfo.success) {
     throw new Error(elementInfo.error || 'Failed to locate student form elements');
@@ -1233,262 +1302,15 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     }
   }
 
-  // Capture a screenshot of the student container or the whole viewport
-  let screenshot = null;
-  try {
-    const container = await page.$(`#bot-student-container-${pen}`);
-    if (container) {
-      screenshot = 'data:image/png;base64,' + (await container.screenshot({ encoding: 'base64' }));
-    } else {
-      screenshot = 'data:image/png;base64,' + (await page.screenshot({ encoding: 'base64' }));
-    }
-  } catch (e) {
-    log(`  ⚠️ Could not take element screenshot: ${e.message}`, 'warn');
+  // Use Puppeteer's native methods to interact with the tagged elements
+  if (elementInfo.progressValue) {
+    await page.select(`#bot-progress-select-${student.penNo}`, elementInfo.progressValue);
+    await delay(300);
   }
 
-  let finalMarks = student.marks ? student.marks.toString() : '';
-  let finalPercent = student.percentage ? Math.round(parseFloat(student.percentage)).toString() : '';
-  let finalDays = student.attendance ? student.attendance.toString() : '155';
-
-  // Performance fallback: if portal has percent input but no marks input, and we only have marks, use marks as percentage!
-  if (elementInfo.hasPercentInput && !elementInfo.hasMarksInput && !finalPercent && finalMarks) {
-    finalPercent = finalMarks;
-  }
-  // And vice-versa: if portal has marks input but no percent input, and we only have percentage, use percentage as marks!
-  if (elementInfo.hasMarksInput && !elementInfo.hasPercentInput && !finalMarks && finalPercent) {
-    finalMarks = finalPercent;
-  }
-
-  // Helper to re-tag elements because Angular destroys and re-renders the row upon Correction click
-  async function reTagElements() {
-    log('  🔄 Re-tagging elements after Correction unlock...');
-    const reTagInfo = await page.evaluate((pen, name) => {
-      let penElement = null;
-      if (name) {
-        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        const searchName = name.toLowerCase();
-        while (walker.nextNode()) {
-          const nodeText = walker.currentNode.textContent.toLowerCase();
-          if (nodeText.trim() === searchName || (nodeText.includes(searchName) && nodeText.length < 100)) {
-            const el = walker.currentNode.parentElement;
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
-              penElement = el;
-              break;
-            }
-          }
-        }
-      }
-      if (!penElement) return { success: false, error: 'Student name text not found after Correction re-render' };
-
-      let studentContainer = penElement.closest('tr');
-      if (!studentContainer) {
-        studentContainer = penElement.closest('.row, .student-block, [class*="record"]');
-      }
-      if (!studentContainer) {
-        studentContainer = penElement;
-        let attempts = 0;
-        while (studentContainer && attempts < 15 && studentContainer.tagName !== 'BODY') {
-          const selects = studentContainer.querySelectorAll('select');
-          const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
-          if (selects.length >= 1 && inputs.length >= 1 && inputs.length <= 8) {
-            break;
-          }
-          studentContainer = studentContainer.parentElement;
-          attempts++;
-        }
-      }
-      if (!studentContainer || studentContainer.tagName === 'BODY') return { success: false, error: 'Student form container not found after Correction re-render' };
-
-      studentContainer.id = 'bot-student-container-' + pen;
-
-      const selects = studentContainer.querySelectorAll('select');
-      const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="password"])');
-      const dataInputs = Array.from(inputs).filter(inp => {
-        const rect = inp.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-
-      if (selects.length > 0) selects[0].id = `bot-progress-select-${pen}`;
-      if (selects.length > 1) selects[selects.length - 1].id = `bot-school-select-${pen}`;
-
-      let marksInput = null, percentInput = null, daysInput = null;
-      dataInputs.forEach((inp, idx) => {
-        let labelText = '';
-        let parent = inp.parentElement;
-        for (let climb = 0; climb < 5 && parent; climb++) {
-          const labels = parent.querySelectorAll('label, span.label, .col-form-label, th');
-          for (const lbl of labels) {
-            const t = lbl.textContent.trim().toLowerCase();
-            if (t.length > 2 && t.length < 80) {
-              labelText = t;
-              break;
-            }
-          }
-          if (labelText) break;
-          parent = parent.parentElement;
-        }
-        const attrParts = [
-          inp.name || '',
-          inp.getAttribute('formcontrolname') || '',
-          inp.placeholder || '',
-          inp.id || ''
-        ];
-        const attrStr = attrParts.join(' ').toLowerCase();
-        const fullMatch = (attrStr + ' ' + labelText).toLowerCase();
-        if (fullMatch.includes('attend') || (fullMatch.includes('day') && !fullMatch.includes('total') && !fullMatch.includes('working'))) {
-          daysInput = inp;
-        } else if (fullMatch.includes('percent') || fullMatch.includes('%') || fullMatch.includes('pcnt')) {
-          percentInput = inp;
-        } else if (fullMatch.includes('mark') || fullMatch.includes('total') || fullMatch.includes('obtain')) {
-          marksInput = inp;
-        }
-      });
-
-      if (dataInputs.length === 3) {
-        if (!marksInput) marksInput = dataInputs[0];
-        if (!percentInput) percentInput = dataInputs[1];
-        if (!daysInput) daysInput = dataInputs[2];
-      } else if (dataInputs.length === 2) {
-        if (!percentInput) percentInput = dataInputs[0];
-        if (!daysInput) daysInput = dataInputs[1];
-      } else if (dataInputs.length > 0) {
-        if (!percentInput) percentInput = dataInputs[0];
-      }
-
-      if (marksInput) marksInput.id = `bot-marks-input-${pen}`;
-      if (percentInput) percentInput.id = `bot-percent-input-${pen}`;
-      if (daysInput) daysInput.id = `bot-days-input-${pen}`;
-
-      const btnsInContainer = Array.from(studentContainer.querySelectorAll('button, a.btn, input[type="button"]'));
-      const updateBtn = btnsInContainer.find(b => b.textContent.trim().toLowerCase() === 'update');
-      if (updateBtn) updateBtn.id = `bot-update-btn-${pen}`;
-
-      return {
-        success: true,
-        hasMarksInput: !!marksInput,
-        hasPercentInput: !!percentInput,
-        hasDaysInput: !!daysInput,
-        hasUpdateBtn: !!updateBtn
-      };
-    }, pen, studentName);
-
-    if (reTagInfo.success) {
-      log('  ✅ Successfully re-tagged elements after Correction');
-      elementInfo.hasMarksInput = reTagInfo.hasMarksInput;
-      elementInfo.hasPercentInput = reTagInfo.hasPercentInput;
-      elementInfo.hasDaysInput = reTagInfo.hasDaysInput;
-      elementInfo.hasUpdateBtn = reTagInfo.hasUpdateBtn;
-    } else {
-      log(`  ⚠️ Re-tagging failed: ${reTagInfo.error}`, 'warn');
-    }
-  }
-
-  if (semiAutomatic) {
-    let confirmData = {
-      studentName: studentName,
-      class: student.class || '',
-      penNo: student.penNo || '',
-      marks: finalMarks,
-      percentage: finalPercent,
-      attendance: finalDays,
-      progressionStatus: student.progressionStatus || 'Promoted',
-      sameSchool: student.sameSchool || 'Studying in Same School',
-      screenshot: screenshot
-    };
-
-    log(`⏳ Waiting for user confirmation for ${studentName}...`);
-    socket.emit('confirm-student', confirmData);
-    
-    const response = await waitForStudentConfirmation(socket);
-    log(`👤 Confirmation response: action=${response.action}`);
-    
-    if (response.action === 'skip') {
-      throw new Error('Skipped by user');
-    }
-    
-    finalMarks = response.marks;
-    finalPercent = response.percentage;
-    finalDays = response.attendance;
-
-    // Click correction button if student is already processed to unlock the form!
-    if (elementInfo.hasCorrectionBtn) {
-      log('  🛠️ Student already processed (status is Done). Clicking "Correction" button to unlock form...');
-      await page.click(`#bot-correction-btn-${pen}`);
-      await delay(1000);
-
-      // Handle any standard sweetalert / bootstrap confirm modal for Correction click
-      try {
-        const confirmBtn = await page.evaluateHandle(() => {
-          const btns = Array.from(document.querySelectorAll('button, .swal2-confirm, .btn-primary'));
-          return btns.find(b => {
-            if (b.offsetParent === null) return false; // Must be visible
-            const text = b.textContent.trim().toLowerCase();
-            return text.includes('yes') || text.includes('ok') || text.includes('confirm') || text.includes('sure');
-          }) || null;
-        });
-        if (confirmBtn) {
-          await confirmBtn.click();
-          log('  ✅ Confirmed correction dialog popup');
-          await delay(2000);
-        }
-      } catch (e) { /* no confirm dialog */ }
-
-      // CRITICAL: Re-tag elements because Angular destroys and re-renders the row upon Correction click
-      await reTagElements();
-    }
-    
-    // Select dropdown options using confirmed choices
-    if (elementInfo.selectsCount > 0) {
-      await selectRowDropdownOption(page, `bot-progress-select-${pen}`, response.progressionStatus);
-      await delay(300);
-    }
-    if (elementInfo.selectsCount > 1) {
-      await selectRowDropdownOption(page, `bot-school-select-${pen}`, response.sameSchool);
-      await delay(300);
-    }
-  } else {
-    // Automatic Mode dropdown selection
-    
-    // Click correction button if student is already processed to unlock the form!
-    if (elementInfo.hasCorrectionBtn) {
-      log('  🛠️ Student already processed (status is Done). Clicking "Correction" button to unlock form...');
-      await page.click(`#bot-correction-btn-${pen}`);
-      await delay(1000);
-
-      // Handle any standard sweetalert / bootstrap confirm modal for Correction click
-      try {
-        const confirmBtn = await page.evaluateHandle(() => {
-          const btns = Array.from(document.querySelectorAll('button, .swal2-confirm, .btn-primary'));
-          return btns.find(b => {
-            if (b.offsetParent === null) return false; // Must be visible
-            const text = b.textContent.trim().toLowerCase();
-            return text.includes('yes') || text.includes('ok') || text.includes('confirm') || text.includes('sure');
-          }) || null;
-        });
-        if (confirmBtn) {
-          await confirmBtn.click();
-          log('  ✅ Confirmed correction dialog popup');
-          await delay(2000);
-        }
-      } catch (e) { /* no confirm dialog */ }
-
-      // CRITICAL: Re-tag elements because Angular destroys and re-renders the row upon Correction click
-      await reTagElements();
-    }
-
-    if (elementInfo.progressValue) {
-      await page.select(`#bot-progress-select-${pen}`, elementInfo.progressValue);
-      await delay(300);
-    }
-    if (elementInfo.schoolValue) {
-      await page.select(`#bot-school-select-${pen}`, elementInfo.schoolValue);
-      await delay(300);
-    }
-  }
-
-  // Helper: Set input value
+  // Helper: Set input value — uses document.execCommand('insertText') which is the ONLY method
+  // that reliably updates Angular's internal FormControl model (not just the DOM .value property).
+  // Previous approaches updated the DOM but Angular's model kept the old value during form submission.
   async function setInputValue(selector, value, fieldName) {
     const el = await page.$(selector);
     if (!el) {
@@ -1517,21 +1339,29 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     if (!elState.found) return false;
     log(`  📝 ${fieldName}: type=${elState.type} readonly=${elState.readOnly} disabled=${elState.disabled} current="${elState.value}" → setting "${value}"`);
 
+    // Use Puppeteer's native type to simulate real user keystrokes. 
+    // This is the most reliable way to trigger Angular's form control value changes.
     try {
+      // Focus the input natively
       await page.focus(selector);
       await delay(100);
       
+      // Clear existing value by pressing End and then Backspace repeatedly
+      // This is 100% human-like and prevents Angular from discarding programmatic changes
       await page.keyboard.press('End');
       for (let i = 0; i < 5; i++) {
         await page.keyboard.press('Backspace');
       }
       
+      // Type the new value natively
       await page.type(selector, value, { delay: 50 });
       await delay(100);
       
+      // Press Tab to confirm/blur natively (triggers Angular's blur event listener)
       await page.keyboard.press('Tab');
       await delay(200);
       
+      // Verify if it worked
       const actual = await page.evaluate(sel => document.querySelector(sel).value, selector);
       if (actual !== value) {
         log(`  ❌ Puppeteer type failed for ${fieldName}: expected "${value}" got "${actual}"`, 'error');
@@ -1540,25 +1370,39 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       log(`  ❌ Error typing into ${fieldName}: ${err.message}`, 'error');
     }
 
+    elementInfo.filled.push(`${fieldName}: ${value}`);
     return true;
   }
 
-  if (finalMarks && elementInfo.hasMarksInput) {
-    await setInputValue(`#bot-marks-input-${pen}`, finalMarks, 'Marks');
+  if (student.marks && elementInfo.hasMarksInput) {
+    await setInputValue(`#bot-marks-input-${student.penNo}`, student.marks.toString(), 'Marks');
     await delay(300);
   }
 
-  if (finalPercent && elementInfo.hasPercentInput) {
-    await setInputValue(`#bot-percent-input-${pen}`, finalPercent, 'Percentage');
+  if (student.percentage && elementInfo.hasPercentInput) {
+    // UDISE+ percentage field is integer-only — round and strip decimals
+    const pctValue = Math.round(parseFloat(student.percentage)).toString();
+    await setInputValue(`#bot-percent-input-${student.penNo}`, pctValue, 'Percentage');
     await delay(300);
   }
 
   if (elementInfo.hasDaysInput) {
-    await setInputValue(`#bot-days-input-${pen}`, finalDays, 'Days Attended');
+    // Fixed days attended to 155
+    const daysValue = '155';
+    await setInputValue(`#bot-days-input-${student.penNo}`, daysValue, 'Days Attended');
     await delay(300);
   }
 
-  // Pre-submit readback check
+  if (elementInfo.schoolValue) {
+    await page.select(`#bot-school-select-${student.penNo}`, elementInfo.schoolValue);
+    await delay(300);
+  }
+
+  for (const f of elementInfo.filled) {
+    log(`  ✓ ${f}`);
+  }
+
+  // Pre-submit readback: what does the portal actually have right now?
   const preSubmitValues = await page.evaluate((pen) => {
     const pctEl = document.querySelector(`#bot-percent-input-${pen}`);
     const daysEl = document.querySelector(`#bot-days-input-${pen}`);
@@ -1566,7 +1410,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       pct: pctEl ? pctEl.value : 'NOT_FOUND',
       days: daysEl ? daysEl.value : 'NOT_FOUND'
     };
-  }, pen);
+  }, student.penNo);
   log(`  🔍 PRE-SUBMIT CHECK: Percentage="${preSubmitValues.pct}" Days="${preSubmitValues.days}"`);
 
   if (!elementInfo.hasUpdateBtn) {
@@ -1574,11 +1418,12 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
   }
 
   log('  💾 Clicking Update button...');
-  await page.click(`#bot-update-btn-${pen}`);
+  await page.click(`#bot-update-btn-${student.penNo}`);
   await delay(2000);
 
   // Check for success confirmation or alert
   const alertText = await page.evaluate(() => {
+    // Check for any visible alert/modal
     const alerts = document.querySelectorAll('.alert, .toast, .modal-body, .swal2-popup, [role="alert"]');
     for (const alert of alerts) {
       if (alert.offsetParent !== null && alert.textContent.trim()) {
@@ -1630,45 +1475,6 @@ function waitForCaptchaAnswer(socket, timeoutMs = 180000) {
       io.once('connection', (s) => s.once('captcha-answer', handler));
     }
   });
-}
-
-// ========================
-// STUDENT CONFIRMATION HELPERS
-// ========================
-
-function waitForStudentConfirmation(socket, timeoutMs = 300000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('Student confirmation timeout — no response within 5 minutes'));
-    }, timeoutMs);
-
-    const handler = (data) => {
-      clearTimeout(timer);
-      resolve(data);
-    };
-
-    if (socket) {
-      socket.once('confirm-student-response', handler);
-    } else {
-      io.once('connection', (s) => s.once('confirm-student-response', handler));
-    }
-  });
-}
-
-async function selectRowDropdownOption(page, selectId, targetText) {
-  await page.evaluate((selId, text) => {
-    const select = document.getElementById(selId);
-    if (!select) return;
-    const lowerTarget = text.toLowerCase();
-    for (const opt of select.options) {
-      const optText = opt.textContent.trim().toLowerCase();
-      if (optText.includes(lowerTarget) || lowerTarget.includes(optText)) {
-        select.value = opt.value;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-        break;
-      }
-    }
-  }, selectId, targetText);
 }
 
 // ========================
