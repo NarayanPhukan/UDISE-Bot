@@ -396,8 +396,21 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
       // Ensure captcha image is fully loaded before screenshot
       await delay(1000);
 
-      // Take screenshot and send to frontend as base64
-      const screenshotBuffer = await page.screenshot({ encoding: 'base64' });
+      // Take a cropped screenshot of the login box for a zoomed, highly readable preview, falling back to full page if needed
+      let screenshotBuffer;
+      try {
+        const loginCard = await page.$('.login-box, .login-card, .login-container, .card, form, #login-form, .login-form');
+        if (loginCard) {
+          log('📷 Capturing zoomed login card for CAPTCHA preview...');
+          screenshotBuffer = await loginCard.screenshot({ encoding: 'base64' });
+        } else {
+          log('📷 Falling back to full page screenshot...');
+          screenshotBuffer = await page.screenshot({ encoding: 'base64' });
+        }
+      } catch (err) {
+        log(`📷 Screenshot error: ${err.message}, taking full page...`, 'warn');
+        screenshotBuffer = await page.screenshot({ encoding: 'base64' });
+      }
       emit('captcha', { image: 'data:image/png;base64,' + screenshotBuffer });
 
       // Wait for user to send CAPTCHA text back via socket
@@ -653,7 +666,15 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
         for (const s of classStudents) {
           results.skipped++;
           processedCount++;
-          results.details.push({ row: s.rowIndex, name: s.studentName, pen: s.penNo, status: 'skipped', error: `Class "${className}" not found in dropdown` });
+           results.details.push({
+             row: s.rowIndex,
+             name: s.studentName,
+             pen: s.penNo,
+             status: 'skipped',
+             error: `Class "${className}" not found in dropdown`,
+             percentage: s.percentage || '',
+             progressionStatus: s.progressionStatus || ''
+           });
         }
         continue;
       }
@@ -793,14 +814,16 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
           });
 
           try {
-            await processStudentOnPage(page, student, log, socket, semiAutomatic);
+            const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic);
             results.success++;
             results.details.push({
               row: student.rowIndex,
               name: student.studentName,
               pen: student.penNo,
               status: 'success',
-              section: section.text
+              section: section.text,
+              percentage: procResult ? procResult.percentage : student.percentage,
+              progressionStatus: procResult ? procResult.progressionStatus : student.progressionStatus
             });
             log(`✅ Successfully updated: ${student.studentName} in Section ${section.text}`, 'success');
           } catch (err) {
@@ -816,9 +839,17 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                const recovered = await loadSection(section.text);
                if (recovered) {
                  try {
-                   await processStudentOnPage(page, student, log, socket, semiAutomatic);
+                   const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic);
                    results.success++;
-                   results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'success', section: section.text });
+                   results.details.push({
+                     row: student.rowIndex,
+                     name: student.studentName,
+                     pen: student.penNo,
+                     status: 'success',
+                     section: section.text,
+                     percentage: procResult ? procResult.percentage : student.percentage,
+                     progressionStatus: procResult ? procResult.progressionStatus : student.progressionStatus
+                   });
                    log(`✅ Successfully updated (after recovery): ${student.studentName} in Section ${section.text}`, 'success');
                  } catch (retryErr) {
                    if (retryErr.message.includes('not found on the page') || retryErr.message.includes('not found') || retryErr.message.includes('not found in DOM')) {
@@ -826,13 +857,31 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                      notFoundStudents.push(student);
                    } else {
                      results.failed++;
-                     results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'failed', error: retryErr.message, section: section.text });
+                     results.details.push({
+                       row: student.rowIndex,
+                       name: student.studentName,
+                       pen: student.penNo,
+                       status: 'failed',
+                       error: retryErr.message,
+                       section: section.text,
+                       percentage: student.percentage || '',
+                       progressionStatus: student.progressionStatus || ''
+                     });
                      log(`❌ Failed for ${student.studentName} after recovery: ${retryErr.message}`, 'error');
                    }
                  }
                } else {
                  results.failed++;
-                 results.details.push({ row: student.rowIndex, name: student.studentName, pen: student.penNo, status: 'failed', error: 'Could not recover page', section: section.text });
+                 results.details.push({
+                   row: student.rowIndex,
+                   name: student.studentName,
+                   pen: student.penNo,
+                   status: 'failed',
+                   error: 'Could not recover page',
+                   section: section.text,
+                   percentage: student.percentage || '',
+                   progressionStatus: student.progressionStatus || ''
+                 });
                  log(`❌ Failed for ${student.studentName}: Could not recover page`, 'error');
                }
             } else {
@@ -843,7 +892,9 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                  pen: student.penNo,
                  status: 'failed',
                  error: err.message,
-                 section: section.text
+                 section: section.text,
+                 percentage: student.percentage || '',
+                 progressionStatus: student.progressionStatus || ''
                });
                log(`❌ Failed for ${student.studentName}: ${err.message}`, 'error');
 
@@ -875,7 +926,9 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
             name: student.studentName,
             pen: student.penNo,
             status: 'failed',
-            error: `Student not found in any section of Class ${className}`
+            error: `Student not found in any section of Class ${className}`,
+            percentage: student.percentage || '',
+            progressionStatus: student.progressionStatus || ''
          });
          log(`❌ Failed for ${student.studentName}: Student not found in any section of Class ${className}`, 'error');
          
@@ -1249,6 +1302,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
   let finalMarks = student.marks ? student.marks.toString() : '';
   let finalPercent = student.percentage ? Math.round(parseFloat(student.percentage)).toString() : '';
   let finalDays = student.attendance ? student.attendance.toString() : '155';
+  let finalProgression = student.progressionStatus || 'Promoted';
 
   // Performance fallback: if portal has percent input but no marks input, and we only have marks, use marks as percentage!
   if (elementInfo.hasPercentInput && !elementInfo.hasMarksInput && !finalPercent && finalMarks) {
@@ -1385,7 +1439,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     }
   }
 
-  if (semiAutomatic) {
+  if (semiAutomatic || elementInfo.hasCorrectionBtn) {
     let confirmData = {
       studentName: studentName,
       class: student.class || '',
@@ -1395,7 +1449,8 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       attendance: finalDays,
       progressionStatus: student.progressionStatus || 'Promoted',
       sameSchool: student.sameSchool || 'Studying in Same School',
-      screenshot: screenshot
+      screenshot: screenshot,
+      alreadyEntered: !!elementInfo.hasCorrectionBtn
     };
 
     log(`⏳ Waiting for user confirmation for ${studentName}...`);
@@ -1411,6 +1466,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     finalMarks = response.marks;
     finalPercent = response.percentage;
     finalDays = response.attendance;
+    finalProgression = response.progressionStatus;
 
     // Click correction button if student is already processed to unlock the form!
     if (elementInfo.hasCorrectionBtn) {
@@ -1521,11 +1577,40 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       await page.focus(selector);
       await delay(100);
       
-      await page.keyboard.press('End');
-      for (let i = 0; i < 5; i++) {
-        await page.keyboard.press('Backspace');
+      // Select all text using triple click (highly effective in all input types, including type="number")
+      await page.click(selector, { clickCount: 3 });
+      await delay(100);
+      
+      // Also try standard keyboard shortcut (Ctrl+A) to make absolutely sure all text is highlighted
+      await page.keyboard.down('Control');
+      await page.keyboard.press('a');
+      await page.keyboard.up('Control');
+      await delay(100);
+      
+      // Delete the selection
+      await page.keyboard.press('Backspace');
+      await delay(150);
+      
+      // Double check if the field is cleared. If not (due to type="number" cursor issues in Chrome),
+      // we clear it programmatically and dispatch input/change events to update Angular state
+      const isCleared = await page.evaluate(sel => {
+        const e = document.querySelector(sel);
+        return e ? e.value === '' : true;
+      }, selector);
+      
+      if (!isCleared) {
+        await page.evaluate(sel => {
+          const e = document.querySelector(sel);
+          if (e) {
+            e.value = '';
+            e.dispatchEvent(new Event('input', { bubbles: true }));
+            e.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }, selector);
+        await delay(100);
       }
       
+      // Type the new value natively so Angular form control validation and dirty checking is triggered
       await page.type(selector, value, { delay: 50 });
       await delay(100);
       
@@ -1606,6 +1691,11 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       await delay(1000);
     }
   } catch (e) { /* no dialog to close */ }
+  
+  return {
+    percentage: finalPercent,
+    progressionStatus: finalProgression
+  };
 }
 
 // ========================

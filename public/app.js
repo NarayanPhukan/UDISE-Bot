@@ -20,6 +20,23 @@ function initSocket() {
     const modal = document.getElementById('confirmModal');
     modal.classList.remove('hidden');
     
+    const warningBanner = document.getElementById('alreadyEnteredWarning');
+    const submitBtn = document.getElementById('confirmSubmitBtn');
+    
+    if (data.alreadyEntered) {
+      if (warningBanner) warningBanner.classList.remove('hidden');
+      if (submitBtn) {
+        submitBtn.textContent = 'UPDATE RECORD';
+        submitBtn.className = 'btn btn-warn';
+      }
+    } else {
+      if (warningBanner) warningBanner.classList.add('hidden');
+      if (submitBtn) {
+        submitBtn.textContent = 'CONFIRM & SUBMIT';
+        submitBtn.className = 'btn btn-accent';
+      }
+    }
+    
     document.getElementById('confName').textContent = data.studentName || '—';
     document.getElementById('confClass').textContent = data.class || '—';
     document.getElementById('confPen').textContent = data.penNo || '—';
@@ -63,6 +80,15 @@ function initSocket() {
     } else {
       imgContainer.classList.add('hidden');
     }
+
+    // Auto-focus and highlight the attendance days input field for seamless keyboard operation
+    setTimeout(() => {
+      const confDays = document.getElementById('confDays');
+      if (confDays) {
+        confDays.focus();
+        confDays.select();
+      }
+    }, 100);
   });
   socket.on('complete', showResults);
   socket.on('error', (d) => {
@@ -228,6 +254,8 @@ document.getElementById('btnRestart').addEventListener('click', () => {
   document.getElementById('currentStudent').classList.add('hidden');
   document.getElementById('captchaModal').classList.add('hidden');
   document.getElementById('resultsGrid').classList.add('hidden');
+  const reportSection = document.getElementById('reportSection');
+  if (reportSection) reportSection.classList.add('hidden');
   document.getElementById('statusText').textContent = 'Initializing...';
   document.getElementById('btnStop').classList.remove('hidden');
   document.getElementById('btnRestart').classList.add('hidden');
@@ -289,6 +317,98 @@ function submitStudentConfirmation(action) {
 document.getElementById('confirmSubmitBtn').addEventListener('click', () => submitStudentConfirmation('submit'));
 document.getElementById('confirmSkipBtn').addEventListener('click', () => submitStudentConfirmation('skip'));
 
+// ---- Lightbox Zoom Handler ----
+const lightboxOverlay = document.getElementById('lightboxOverlay');
+const lightboxImg = document.getElementById('lightboxImg');
+const captchaImg = document.getElementById('captchaImg');
+const confirmImg = document.getElementById('confirmImg');
+
+function openZoom(src) {
+  if (!src) return;
+  lightboxImg.src = src;
+  lightboxOverlay.classList.remove('hidden');
+}
+
+if (captchaImg) {
+  captchaImg.addEventListener('click', () => openZoom(captchaImg.src));
+}
+if (confirmImg) {
+  confirmImg.addEventListener('click', () => openZoom(confirmImg.src));
+}
+if (lightboxOverlay) {
+  lightboxOverlay.addEventListener('click', () => {
+    lightboxOverlay.classList.add('hidden');
+  });
+}
+
+// ---- Global Keyboard Shortcuts (Key Functions) ----
+window.addEventListener('keydown', (e) => {
+  const confirmModal = document.getElementById('confirmModal');
+  const captchaModal = document.getElementById('captchaModal');
+  const lightboxOverlay = document.getElementById('lightboxOverlay');
+
+  // 1. If Zoom Lightbox is active, Esc key closes it
+  if (lightboxOverlay && !lightboxOverlay.classList.contains('hidden')) {
+    if (e.key === 'Escape') {
+      lightboxOverlay.classList.add('hidden');
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // 2. If Student Confirmation modal is active (visible)
+  if (confirmModal && !confirmModal.classList.contains('hidden')) {
+    // Escape key skips the student
+    if (e.key === 'Escape') {
+      submitStudentConfirmation('skip');
+      e.preventDefault();
+      return;
+    }
+    
+    // Enter key submits the student confirmation
+    if (e.key === 'Enter') {
+      submitStudentConfirmation('submit');
+      e.preventDefault();
+      return;
+    }
+
+    // Space key or "z" zooms/toggles lightbox screenshot (if not focused inside input/select fields)
+    if ((e.key === ' ' || e.key.toLowerCase() === 'z') && 
+        document.activeElement.tagName !== 'INPUT' && 
+        document.activeElement.tagName !== 'SELECT') {
+      const confirmImg = document.getElementById('confirmImg');
+      if (confirmImg && confirmImg.src) {
+        openZoom(confirmImg.src);
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // 3. If CAPTCHA modal is active, focus CAPTCHA input on Escape
+  if (captchaModal && !captchaModal.classList.contains('hidden')) {
+    if (e.key === 'Escape') {
+      document.getElementById('captchaInput').focus();
+      e.preventDefault();
+      return;
+    }
+  }
+});
+
+// Attach keydown listener to input fields to trigger confirmation on Enter
+const confirmInputIds = ['confMarks', 'confPercent', 'confDays', 'confProgression', 'confSameSchool'];
+confirmInputIds.forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        submitStudentConfirmation('submit');
+        e.preventDefault();
+      }
+    });
+  }
+});
+
 // ---- Progress ----
 function updateProgress(d) {
   document.getElementById('progressBar').style.width = d.percent + '%';
@@ -323,6 +443,63 @@ function showResults(r) {
   document.getElementById('rTotal').textContent = r.total;
   document.getElementById('btnStop').classList.add('hidden');
   document.getElementById('btnRestart').classList.remove('hidden');
+
+  // Audit Warning Report compilations
+  const reportSection = document.getElementById('reportSection');
+  const skippedList = document.getElementById('skippedList');
+  const lowPercentList = document.getElementById('lowPercentList');
+  
+  if (reportSection && r.details && Array.isArray(r.details)) {
+    // 1. Compile Left-Out / Skipped / Failed Students
+    const leftOut = r.details.filter(d => d.status === 'failed' || d.status === 'skipped');
+    document.getElementById('countSkipped').textContent = leftOut.length;
+    
+    if (leftOut.length > 0) {
+      skippedList.innerHTML = leftOut.map(s => {
+        const reason = s.error || 'Skipped by user';
+        const sectionInfo = s.section ? `Section ${s.section}` : 'N/A';
+        return `<li>
+          <div>
+            <span class="student-name">${s.name}</span>
+            <span style="font-size:10px; display:block; color:var(--text-muted); margin-top:2px;">PEN: ${s.pen || 'N/A'} • ${sectionInfo}</span>
+          </div>
+          <span class="student-meta" style="color:var(--danger); border:1px solid rgba(239,68,68,0.25); background:rgba(239,68,68,0.05);">${reason}</span>
+        </li>`;
+      }).join('');
+    } else {
+      skippedList.innerHTML = `<li class="empty-list">No skipped or left-out students. All processed perfectly!</li>`;
+    }
+
+    // 2. Compile Students Promoted with Marks/Percentage < 39%
+    const lowPercent = r.details.filter(d => {
+      if (d.status !== 'success') return false;
+      const pct = parseFloat(d.percentage);
+      if (isNaN(pct) || pct >= 39) return false;
+      
+      const prog = String(d.progressionStatus || '').toLowerCase();
+      return prog.includes('promote') || prog.includes('pass') || prog === 'promoted';
+    });
+    
+    document.getElementById('countLowPercent').textContent = lowPercent.length;
+    
+    if (lowPercent.length > 0) {
+      lowPercentList.innerHTML = lowPercent.map(s => {
+        return `<li>
+          <div>
+            <span class="student-name">${s.name}</span>
+            <span style="font-size:10px; display:block; color:var(--text-muted); margin-top:2px;">PEN: ${s.pen || 'N/A'} • Section ${s.section}</span>
+          </div>
+          <span class="student-meta" style="color:var(--warn); border:1px solid rgba(245,158,11,0.25); background:rgba(245,158,11,0.05);">
+            Marks: <strong>${s.percentage}%</strong> • ${s.progressionStatus}
+          </span>
+        </li>`;
+      }).join('');
+    } else {
+      lowPercentList.innerHTML = `<li class="empty-list">No students found with &lt;39% marks and Promoted status.</li>`;
+    }
+
+    reportSection.classList.remove('hidden');
+  }
 }
 
 // ---- Init ----

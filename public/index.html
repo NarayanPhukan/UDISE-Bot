@@ -219,154 +219,220 @@
       <!-- ============ STEP 3: AUTOMATION ============ -->
       <section class="step-panel" id="panel3">
 
-        <!-- Progress -->
-        <div class="progress-block">
-          <div class="progress-top">
-            <span class="progress-label" id="statusText">Initializing...</span>
-            <span class="progress-pct" id="progressPct">0%</span>
-          </div>
-          <div class="progress-track">
-            <div class="progress-fill" id="progressBar"></div>
-          </div>
-          <div class="progress-bottom">
-            <span id="progressCount">0 / 0 students</span>
-          </div>
-        </div>
-
-        <!-- Current Student -->
-        <div class="current-item hidden" id="currentStudent">
-          <div class="current-pulse"></div>
-          <span>Processing: <strong id="currentName">—</strong></span>
-        </div>
-
-        <!-- CAPTCHA Modal -->
-        <div class="captcha-modal hidden" id="captchaModal">
-          <div class="captcha-card">
-            <div class="captcha-header">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              <div>
-                <strong>CAPTCHA Required</strong>
-                <p>Type the CAPTCHA text shown in the screenshot below</p>
+        <div class="automation-layout">
+          <!-- Left Column: Console & Status -->
+          <div class="automation-left">
+            <!-- Progress -->
+            <div class="progress-block">
+              <div class="progress-top">
+                <span class="progress-label" id="statusText">Initializing...</span>
+                <span class="progress-pct" id="progressPct">0%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" id="progressBar"></div>
+              </div>
+              <div class="progress-bottom">
+                <span id="progressCount">0 / 0 students</span>
               </div>
             </div>
-            <div class="captcha-img-wrap">
-              <img id="captchaImg" src="" alt="CAPTCHA Screenshot">
-            </div>
-            <div class="captcha-input-row">
-              <input type="text" id="captchaInput" placeholder="Enter CAPTCHA text" autocomplete="off">
-              <button class="btn btn-accent" id="captchaSubmitBtn">SUBMIT</button>
-            </div>
-          </div>
-        </div>
 
-        <!-- Student Confirmation Modal -->
-        <div class="captcha-modal hidden" id="confirmModal">
-          <div class="captcha-card confirmation-card">
-            <div class="captcha-header">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" style="color: var(--accent);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              <div>
-                <strong>Confirm Student Data</strong>
-                <p>Verify or modify student progression details before submitting to UDISE+</p>
+            <!-- Current Student -->
+            <div class="current-item hidden" id="currentStudent">
+              <div class="current-pulse"></div>
+              <span>Processing: <strong id="currentName">—</strong></span>
+            </div>
+
+            <!-- Results Cards -->
+            <div class="results-grid hidden" id="resultsGrid">
+              <div class="result-tile success">
+                <span class="result-num" id="rSuccess">0</span>
+                <span class="result-lbl">Successful</span>
+              </div>
+              <div class="result-tile error">
+                <span class="result-num" id="rFailed">0</span>
+                <span class="result-lbl">Failed</span>
+              </div>
+              <div class="result-tile info">
+                <span class="result-num" id="rTotal">0</span>
+                <span class="result-lbl">Total</span>
               </div>
             </div>
-            
-            <div class="student-info-summary">
-              <div class="info-item"><strong>Name:</strong> <span id="confName">—</span></div>
-              <div class="info-item"><strong>Class:</strong> <span id="confClass">—</span></div>
-              <div class="info-item"><strong>PEN No:</strong> <span id="confPen">—</span></div>
-            </div>
-            
-            <div class="confirm-form-fields">
-              <div class="form-field-row">
-                <div class="form-field-col">
-                  <label for="confMarks">Marks Obtained</label>
-                  <input type="number" id="confMarks" placeholder="Marks" autocomplete="off">
+
+            <!-- Audit Report Section -->
+            <div class="report-section hidden" id="reportSection">
+              <div class="report-card">
+                <div class="report-header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  <span>Progression Audit &amp; Warnings</span>
                 </div>
-                <div class="form-field-col">
-                  <label for="confPercent">Percentage (%)</label>
-                  <input type="number" id="confPercent" placeholder="Percentage" autocomplete="off">
-                </div>
-                <div class="form-field-col">
-                  <label for="confDays">Days Attended</label>
-                  <input type="number" id="confDays" placeholder="Days" autocomplete="off">
-                </div>
-              </div>
-              <div class="form-field-row mt-2">
-                <div class="form-field-col flex-2">
-                  <label for="confProgression">Progression Status</label>
-                  <select id="confProgression">
-                    <option value="Promoted">Promoted / Passed</option>
-                    <option value="Not Promoted">Not Promoted / Failed</option>
-                    <option value="Promoted Without Examination">Promoted Without Exam</option>
-                    <option value="Discontinued Before Examination">Discontinued Before Exam</option>
-                  </select>
-                </div>
-                <div class="form-field-col flex-2">
-                  <label for="confSameSchool">Schooling Status</label>
-                  <select id="confSameSchool">
-                    <option value="Studying in Same School">Studying in Same School</option>
-                    <option value="Left School with TC / Without TC">Left School with TC / Without TC</option>
-                  </select>
+                
+                <div class="report-body">
+                  <!-- Left Out / Failed / Skipped List -->
+                  <div class="report-group">
+                    <div class="report-group-title">
+                      <span class="dot dot-red"></span>
+                      Left-Out / Skipped Students (<span id="countSkipped">0</span>)
+                    </div>
+                    <ul class="report-list" id="skippedList">
+                      <li class="empty-list">No skipped or left-out students. All processed perfectly!</li>
+                    </ul>
+                  </div>
+
+                  <!-- Promoted but Percentage < 39% List -->
+                  <div class="report-group">
+                    <div class="report-group-title">
+                      <span class="dot dot-orange"></span>
+                      Promoted with Marks &lt; 39% (<span id="countLowPercent">0</span>)
+                    </div>
+                    <ul class="report-list" id="lowPercentList">
+                      <li class="empty-list">No students found with &lt;39% marks and Promoted status.</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <!-- Portal Screenshot for reference -->
-            <div class="confirm-screenshot-wrap mt-3" id="confirmScreenshotContainer">
-              <span class="screenshot-lbl">UDISE+ Portal Screenshot Reference</span>
-              <div class="small-screenshot">
-                <img id="confirmImg" src="" alt="Portal Student Row Screenshot">
+            <!-- Console Log -->
+            <div class="console-section">
+              <div class="console-bar">
+                <h4>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                  LIVE CONSOLE LOG
+                </h4>
+                <div style="display: flex; gap: 8px;">
+                  <button class="icon-btn" id="copyLogsBtn" title="Copy Logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                  <button class="icon-btn" id="clearLogsBtn" title="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                </div>
+              </div>
+              <div class="console-body" id="consoleBody">
+                <div class="console-line info"><span class="cl-time">--:--:--</span><span class="cl-msg">Waiting to start...</span></div>
               </div>
             </div>
 
-            <div class="captcha-input-row mt-3">
-              <button class="btn btn-ghost" id="confirmSkipBtn">SKIP STUDENT</button>
-              <button class="btn btn-accent" id="confirmSubmitBtn" style="flex: 1;">CONFIRM & SUBMIT</button>
+            <!-- Actions -->
+            <div class="panel-actions">
+              <button class="btn btn-danger" id="btnStop">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                STOP BOT
+              </button>
+              <button class="btn btn-primary hidden" id="btnRestart">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                NEW SESSION
+              </button>
             </div>
           </div>
-        </div>
 
-        <!-- Results Cards -->
-        <div class="results-grid hidden" id="resultsGrid">
-          <div class="result-tile success">
-            <span class="result-num" id="rSuccess">0</span>
-            <span class="result-lbl">Successful</span>
-          </div>
-          <div class="result-tile error">
-            <span class="result-num" id="rFailed">0</span>
-            <span class="result-lbl">Failed</span>
-          </div>
-          <div class="result-tile info">
-            <span class="result-num" id="rTotal">0</span>
-            <span class="result-lbl">Total</span>
-          </div>
-        </div>
+          <!-- Right Column: Interactive Modals / Portal Preview -->
+          <div class="automation-right">
+            <!-- CAPTCHA Modal -->
+            <div class="captcha-modal hidden" id="captchaModal">
+              <div class="captcha-card">
+                <div class="captcha-header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <div>
+                    <strong>CAPTCHA Required</strong>
+                    <p>Type the CAPTCHA text shown in the screenshot below</p>
+                  </div>
+                </div>
+                <div class="captcha-img-wrap">
+                  <img id="captchaImg" src="" alt="CAPTCHA Screenshot">
+                </div>
+                <div class="captcha-input-row">
+                  <input type="text" id="captchaInput" placeholder="Enter CAPTCHA text" autocomplete="off">
+                  <button class="btn btn-accent" id="captchaSubmitBtn">SUBMIT</button>
+                </div>
+              </div>
+            </div>
 
-        <!-- Console Log -->
-        <div class="console-section">
-          <div class="console-bar">
-            <h4>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-              LIVE CONSOLE LOG
-            </h4>
-            <button class="icon-btn" id="copyLogsBtn" title="Copy Logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button class="icon-btn" id="clearLogsBtn" title="Clear"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-          </div>
-          <div class="console-body" id="consoleBody">
-            <div class="console-line info"><span class="cl-time">--:--:--</span><span class="cl-msg">Waiting to start...</span></div>
-          </div>
-        </div>
+            <!-- Student Confirmation Modal -->
+            <div class="captcha-modal hidden" id="confirmModal">
+              <div class="captcha-card confirmation-card">
+                <div class="captcha-header">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" style="color: var(--accent);"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <div>
+                    <strong>Confirm Student Data</strong>
+                    <p>Verify or modify student progression details before submitting to UDISE+</p>
+                  </div>
+                </div>
+                
+                <div class="student-info-summary">
+                  <div class="info-item"><strong>Name:</strong> <span id="confName">—</span></div>
+                  <div class="info-item"><strong>Class:</strong> <span id="confClass">—</span></div>
+                  <div class="info-item"><strong>PEN No:</strong> <span id="confPen">—</span></div>
+                </div>
+                
+                <!-- Already Entered Warning Banner -->
+                <div class="already-entered-warning hidden" id="alreadyEnteredWarning">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                  <div>
+                    <strong>Record Already Entered Previously!</strong>
+                    <span>Do you want to update it or skip?</span>
+                  </div>
+                </div>
+                
+                <div class="confirm-form-fields">
+                  <div class="form-field-row">
+                    <div class="form-field-col">
+                      <label for="confMarks">Marks Obtained</label>
+                      <input type="number" id="confMarks" placeholder="Marks" autocomplete="off">
+                    </div>
+                    <div class="form-field-col">
+                      <label for="confPercent">Percentage (%)</label>
+                      <input type="number" id="confPercent" placeholder="Percentage" autocomplete="off">
+                    </div>
+                    <div class="form-field-col">
+                      <label for="confDays">Days Attended</label>
+                      <input type="number" id="confDays" placeholder="Days" autocomplete="off">
+                    </div>
+                  </div>
+                  <div class="form-field-row mt-2">
+                    <div class="form-field-col flex-2">
+                      <label for="confProgression">Progression Status</label>
+                      <select id="confProgression">
+                        <option value="Promoted">Promoted / Passed</option>
+                        <option value="Not Promoted">Not Promoted / Failed</option>
+                        <option value="Promoted Without Examination">Promoted Without Exam</option>
+                        <option value="Discontinued Before Examination">Discontinued Before Exam</option>
+                      </select>
+                    </div>
+                    <div class="form-field-col flex-2">
+                      <label for="confSameSchool">Schooling Status</label>
+                      <select id="confSameSchool">
+                        <option value="Studying in Same School">Studying in Same School</option>
+                        <option value="Left School with TC / Without TC">Left School with TC / Without TC</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
 
-        <!-- Actions -->
-        <div class="panel-actions">
-          <button class="btn btn-danger" id="btnStop">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-            STOP BOT
-          </button>
-          <button class="btn btn-primary hidden" id="btnRestart">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-            NEW SESSION
-          </button>
+                <!-- Portal Screenshot for reference -->
+                <div class="confirm-screenshot-wrap mt-3" id="confirmScreenshotContainer">
+                  <span class="screenshot-lbl">UDISE+ Portal Screenshot Reference</span>
+                  <div class="small-screenshot">
+                    <img id="confirmImg" src="" alt="Portal Student Row Screenshot">
+                  </div>
+                </div>
+
+                <div class="captcha-input-row mt-3">
+                  <button class="btn btn-ghost" id="confirmSkipBtn">SKIP STUDENT</button>
+                  <button class="btn btn-accent" id="confirmSubmitBtn" style="flex: 1;">CONFIRM & SUBMIT</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Default Placeholder when no action is needed -->
+            <div class="preview-placeholder" id="previewPlaceholder">
+              <div class="placeholder-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="64" height="64">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                  <line x1="8" y1="21" x2="16" y2="21"/>
+                  <line x1="12" y1="17" x2="12" y2="21"/>
+                </svg>
+              </div>
+              <h3>UDISE+ Active Preview</h3>
+              <p>Real-time automation inputs, CAPTCHA requests, or student confirmation screenshots will appear here.</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -393,6 +459,14 @@
     <footer class="footer">
       <p>UDISE+ Data Bot &middot; For school administrators &middot; Not affiliated with UDISE+ / MHRD</p>
     </footer>
+  </div>
+
+  <div id="lightboxOverlay" class="lightbox-overlay hidden">
+    <div class="lightbox-content">
+      <span class="lightbox-close">&times;</span>
+      <img id="lightboxImg" src="" alt="Zoomed Screenshot">
+      <p class="lightbox-caption">Click anywhere to close zoom</p>
+    </div>
   </div>
 
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>

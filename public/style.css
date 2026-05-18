@@ -111,7 +111,7 @@ body {
 .app-wrapper {
   position: relative;
   z-index: 1;
-  max-width: 860px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 24px 60px;
   display: flex;
@@ -137,7 +137,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  max-width: 860px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -854,6 +854,104 @@ tr:hover td { background: rgba(0, 242, 254, 0.02); }
 }
 
 /* =========================================
+   AUDIT REPORT SECTION
+   ========================================= */
+.report-section {
+  margin: 24px 0;
+}
+.report-card {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.report-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.report-header svg {
+  color: var(--danger);
+  animation: pulse 2s infinite;
+}
+.report-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.report-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-main);
+  margin-bottom: 8px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot-red {
+  background-color: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
+.dot-orange {
+  background-color: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+.report-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  max-height: 180px;
+  overflow-y: auto;
+}
+.report-list li {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-muted);
+}
+.report-list li:last-child {
+  border-bottom: none;
+}
+.report-list li .student-name {
+  font-weight: 600;
+  color: var(--text-main);
+}
+.report-list li .student-meta {
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.report-list li.empty-list {
+  color: var(--text-muted);
+  font-style: italic;
+  justify-content: center;
+  padding: 16px;
+}
+
+/* =========================================
    CONSOLE
    ========================================= */
 .console-bar {
@@ -1025,6 +1123,55 @@ tr:hover td { background: rgba(0, 242, 254, 0.02); }
   color: var(--text-muted);
 }
 
+/* Already Entered Warning Banner */
+.already-entered-warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(245, 158, 11, 0.08) !important;
+  border: 1px dashed rgba(245, 158, 11, 0.5) !important;
+  color: var(--warn) !important;
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 24px;
+  animation: borderFlash 2s infinite ease-in-out;
+}
+
+.already-entered-warning svg {
+  color: var(--warn) !important;
+  flex-shrink: 0;
+  animation: pulse 1.5s infinite ease-in-out;
+}
+
+.already-entered-warning strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.already-entered-warning span {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.btn-warn {
+  background: linear-gradient(135deg, #f59e0b, #d97706) !important;
+  color: #fff !important;
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.4) !important;
+  border: none !important;
+}
+
+.btn-warn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(245, 158, 11, 0.6) !important;
+}
+
+@keyframes borderFlash {
+  0%, 100% { border-color: rgba(245, 158, 11, 0.4); box-shadow: 0 0 5px rgba(245, 158, 11, 0.05); }
+  50% { border-color: rgba(245, 158, 11, 0.8); box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+}
+
 .info-item strong {
   color: var(--text-main);
   margin-right: 4px;
@@ -1152,8 +1299,123 @@ tr:hover td { background: rgba(0, 242, 254, 0.02); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 /* =========================================
+   AUTOMATION DASHBOARD LAYOUT (SPLIT SCREEN)
+   ========================================= */
+.automation-layout {
+  display: flex;
+  gap: 32px;
+  align-items: stretch;
+  margin-top: 24px;
+}
+
+.automation-left {
+  flex: 1.1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.automation-right {
+  flex: 1.1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+/* Modal styling in dashboard right panel */
+.automation-right .captcha-modal {
+  margin: 0;
+  width: 100%;
+}
+
+.automation-right .captcha-card {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Adjust small screenshot inside dashboard right panel */
+.automation-right .small-screenshot {
+  max-height: 240px;
+}
+
+.automation-right .small-screenshot img {
+  max-height: 240px;
+  width: 100%;
+  object-fit: contain;
+}
+
+/* Default Placeholder when no action is needed */
+.preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 32px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.015);
+  height: 100%;
+  min-height: 480px;
+  box-sizing: border-box;
+  color: var(--text-muted);
+  transition: all 0.3s ease;
+}
+
+.placeholder-icon {
+  margin-bottom: 20px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 10px var(--accent-glow));
+  opacity: 0.85;
+}
+
+.preview-placeholder h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text-main);
+}
+
+.preview-placeholder p {
+  font-size: 13px;
+  max-width: 320px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* Auto-hide the placeholder when either captcha or confirmation modal is active */
+#captchaModal:not(.hidden) ~ #previewPlaceholder {
+  display: none !important;
+}
+
+#confirmModal:not(.hidden) ~ #previewPlaceholder {
+  display: none !important;
+}
+
+/* Adjust live logs height in split screen dashboard */
+.console-body {
+  height: 380px; /* Make the log taller since it occupies the left side beautifully */
+}
+
+/* =========================================
    RESPONSIVE
    ========================================= */
+@media (max-width: 900px) {
+  .automation-layout {
+    flex-direction: column;
+    gap: 32px;
+  }
+  
+  .preview-placeholder {
+    min-height: 300px;
+    padding: 32px 20px;
+  }
+}
+
 @media (max-width: 640px) {
   .app-wrapper { padding: 0 16px 40px; }
   .main-card { padding: 24px 20px; }
@@ -1164,4 +1426,76 @@ tr:hover td { background: rgba(0, 242, 254, 0.02); }
   .captcha-input-row { flex-direction: column; }
   .panel-actions { flex-direction: column-reverse; gap: 16px; }
   .panel-actions button { width: 100%; }
+}
+
+/* =========================================
+   LIGHTBOX OVERLAY (ZOOM)
+   ========================================= */
+.lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(3, 3, 3, 0.96);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.lightbox-content {
+  position: relative;
+  max-width: 92vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox-content img {
+  max-width: 90vw;
+  max-height: 84vh;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.85);
+  object-fit: contain;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  font-size: 36px;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.2s ease;
+}
+
+.lightbox-close:hover {
+  color: var(--accent);
+}
+
+.lightbox-caption {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#captchaImg, #confirmImg {
+  cursor: zoom-in;
+  transition: opacity 0.2s ease;
+}
+
+#captchaImg:hover, #confirmImg:hover {
+  opacity: 0.9;
 }
