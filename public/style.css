@@ -1499,3 +1499,108 @@ tr:hover td { background: rgba(0, 242, 254, 0.02); }
 #captchaImg:hover, #confirmImg:hover {
   opacity: 0.9;
 }
+
+/* =========================================
+   ERROR FLASH TOAST
+   ========================================= */
+.error-flash-toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 10000;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 20px;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  border-radius: 12px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 8px 32px rgba(244, 63, 94, 0.2), 0 0 0 1px rgba(244, 63, 94, 0.1);
+  max-width: 420px;
+  animation: flashSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.error-flash-toast .flash-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.error-flash-toast .flash-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.error-flash-toast .flash-body strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.error-flash-toast .flash-body span {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.error-flash-toast .flash-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+
+.error-flash-toast .flash-close:hover {
+  color: var(--text-main);
+}
+
+@keyframes flashSlideIn {
+  from { opacity: 0; transform: translateX(40px) translateY(-10px); }
+  to { opacity: 1; transform: translateX(0) translateY(0); }
+}
+
+/* =========================================
+   COUNTDOWN BADGE
+   ========================================= */
+.countdown-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--warn);
+  white-space: nowrap;
+  animation: countdownPulse 1s ease-in-out infinite;
+}
+
+@keyframes countdownPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+/* =========================================
+   BTN WARN (for update record button)
+   ========================================= */
+.btn-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-color: var(--warn-border);
+}
+.btn-warn:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.14);
+  transform: translateY(-1.5px);
+  box-shadow: 0 6px 20px rgba(251, 191, 36, 0.15);
+}
+

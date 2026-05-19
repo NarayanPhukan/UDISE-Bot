@@ -41,6 +41,9 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // Store active automation sessions
 const activeSessions = new Map();
 
+// In-memory set of successfully entered student PENs (persists across sessions)
+const successfulPENs = new Set();
+
 // ========================
 // API ROUTES
 // ========================
@@ -143,7 +146,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 
 // Start automation
 app.post('/api/start-automation', (req, res) => {
-  const { socketId, udiseCode, password, data, filePath, semiAutomatic } = req.body;
+  const { socketId, udiseCode, password, data, filePath, semiAutomatic, targetSection } = req.body;
 
   if (!udiseCode || !password || !data || data.length === 0) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -153,7 +156,7 @@ app.post('/api/start-automation', (req, res) => {
   activeSessions.set(sessionId, { status: 'starting', progress: 0 });
 
   // Start automation in background
-  runAutomation(sessionId, socketId, udiseCode, password, data, filePath, semiAutomatic);
+  runAutomation(sessionId, socketId, udiseCode, password, data, filePath, semiAutomatic, targetSection);
 
   res.json({ success: true, sessionId });
 });
@@ -170,6 +173,18 @@ app.post('/api/stop-automation', (req, res) => {
   }
 });
 
+// Clear the in-memory list of successfully entered PENs
+app.post('/api/clear-memory', (req, res) => {
+  const count = successfulPENs.size;
+  successfulPENs.clear();
+  res.json({ success: true, cleared: count, message: `Cleared ${count} remembered student PENs.` });
+});
+
+// Get count of remembered PENs
+app.get('/api/memory-count', (req, res) => {
+  res.json({ count: successfulPENs.size });
+});
+
 // Get automation status
 app.get('/api/status/:sessionId', (req, res) => {
   const session = activeSessions.get(req.params.sessionId);
@@ -184,7 +199,7 @@ app.get('/api/status/:sessionId', (req, res) => {
 // BROWSER AUTOMATION
 // ========================
 
-async function runAutomation(sessionId, socketId, udiseCode, password, students, filePath, semiAutomatic = false) {
+async function runAutomation(sessionId, socketId, udiseCode, password, students, filePath, semiAutomatic = false, targetSection = '') {
   const socket = io.sockets.sockets.get(socketId);
   const session = activeSessions.get(sessionId);
   let browser = null;
@@ -681,7 +696,7 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
       await delay(1500);
 
       // Find available sections for this class
-      const availableSections = await page.evaluate(() => {
+      let availableSections = await page.evaluate(() => {
         const selects = document.querySelectorAll('select');
         for (const select of selects) {
           const firstOpt = select.options[0]?.textContent.toLowerCase() || '';
@@ -700,6 +715,23 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
         availableSections.push({ value: null, text: 'Default' });
       } else {
         log(`📋 Found ${availableSections.length} sections for Class ${className}: ${availableSections.map(s => s.text).join(', ')}`);
+
+        // Filter sections if a specific targetSection is requested
+        if (targetSection) {
+          const normalizedTarget = targetSection.trim().toUpperCase();
+          const filtered = availableSections.filter(s => {
+            const sText = s.text.trim().toUpperCase();
+            return sText === normalizedTarget || sText.includes(normalizedTarget) || normalizedTarget.includes(sText);
+          });
+
+          if (filtered.length > 0) {
+            availableSections = filtered;
+            log(`🎯 Target Section Filter Active: Processing ONLY section "${availableSections.map(s => s.text).join(', ')}"`, 'info');
+          } else {
+            log(`⚠️ Target section "${targetSection}" not found in available sections for Class ${className}: ${availableSections.map(s => s.text).join(', ')}. Skipping this class group.`, 'warn');
+            availableSections = [];
+          }
+        }
       }
 
       let remainingStudents = [...classStudents];
@@ -803,6 +835,46 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
             break;
           }
 
+          // Check if this student was already successfully entered in a previous run
+          const penKey = student.penNo ? String(student.penNo).trim() : '';
+          if (penKey && successfulPENs.has(penKey)) {
+            log(`⏭️ Skipping student "${student.studentName || 'Unknown'}" (PEN: ${penKey}): Already successfully entered in a previous session.`, 'info');
+            results.skipped++;
+            results.details.push({
+              row: student.rowIndex,
+              name: student.studentName,
+              pen: student.penNo,
+              status: 'skipped',
+              error: 'Already successfully entered (from memory)',
+              section: section.text,
+              percentage: student.percentage || '',
+              progressionStatus: student.progressionStatus || ''
+            });
+            continue;
+          }
+
+          // Check if the student's Excel record has any progression data
+          const marksVal = student.marks ? String(student.marks).trim() : '';
+          const percentVal = student.percentage ? String(student.percentage).trim() : '';
+          const daysVal = student.attendance ? String(student.attendance).trim() : '';
+          const statusVal = student.progressionStatus ? String(student.progressionStatus).trim() : '';
+
+          if (!marksVal && !percentVal && !daysVal && !statusVal) {
+            log(`⏭️ Skipping student "${student.studentName || 'Unknown'}" (PEN: ${student.penNo || 'N/A'}): Excel record has no progression data.`, 'info');
+            results.skipped++;
+            results.details.push({
+              row: student.rowIndex,
+              name: student.studentName,
+              pen: student.penNo,
+              status: 'skipped',
+              error: 'Excel row contains no data for marks, percentage, attendance, or progression status',
+              section: section.text,
+              percentage: '',
+              progressionStatus: ''
+            });
+            continue;
+          }
+
           const progressPercent = 25 + Math.round((processedCount / students.length) * 70);
           log(`\n📝 Processing ${processedCount}/${students.length}: ${student.studentName || 'Unknown'} (PEN: ${student.penNo || 'N/A'}) in Section ${section.text}`);
           emit('progress', {
@@ -814,8 +886,10 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
           });
 
           try {
-            const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic);
+            const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic, emit);
             results.success++;
+            // Remember this PEN as successfully entered
+            if (penKey) successfulPENs.add(penKey);
             results.details.push({
               row: student.rowIndex,
               name: student.studentName,
@@ -839,8 +913,9 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                const recovered = await loadSection(section.text);
                if (recovered) {
                  try {
-                   const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic);
+                   const procResult = await processStudentOnPage(page, student, log, socket, semiAutomatic, emit);
                    results.success++;
+                    if (penKey) successfulPENs.add(penKey);
                    results.details.push({
                      row: student.rowIndex,
                      name: student.studentName,
@@ -897,6 +972,8 @@ async function runAutomation(sessionId, socketId, udiseCode, password, students,
                  progressionStatus: student.progressionStatus || ''
                });
                log(`❌ Failed for ${student.studentName}: ${err.message}`, 'error');
+               // Flash the error to the user
+               emit('error-flash', { studentName: student.studentName, message: err.message });
 
                // Take screenshot on failure
                try {
@@ -1081,7 +1158,7 @@ async function selectDropdownOption(page, labelText, targetValue, log) {
  * The page shows all students in the class — find this student's row by PEN,
  * fill in the form fields within that row, and click Update.
  */
-async function processStudentOnPage(page, student, log, socket, semiAutomatic = false) {
+async function processStudentOnPage(page, student, log, socket, semiAutomatic = false, emit = null) {
   const studentName = student.studentName ? String(student.studentName).trim() : '';
   if (!studentName) throw new Error('No name provided to identify this student');
   
@@ -1092,10 +1169,10 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     let penElement = null;
     if (name) {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      const searchName = name.toLowerCase();
+      const searchNameNormalized = name.toLowerCase().replace(/\s+/g, ' ').trim();
       while (walker.nextNode()) {
-        const nodeText = walker.currentNode.textContent.toLowerCase();
-        if (nodeText.trim() === searchName || (nodeText.includes(searchName) && nodeText.length < 100)) {
+        const nodeTextNormalized = walker.currentNode.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (nodeTextNormalized === searchNameNormalized || (nodeTextNormalized.includes(searchNameNormalized) && nodeTextNormalized.length < 100)) {
           const el = walker.currentNode.parentElement;
           const style = window.getComputedStyle(el);
           const rect = el.getBoundingClientRect();
@@ -1118,7 +1195,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       let attempts = 0;
       while (studentContainer && attempts < 15 && studentContainer.tagName !== 'BODY') {
         const selects = studentContainer.querySelectorAll('select');
-        const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+        const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input:not([type])');
         // Stop if we find a reasonable number of inputs for ONE student (not the whole page)
         if (selects.length >= 1 && inputs.length >= 1 && inputs.length <= 8) {
           break;
@@ -1136,7 +1213,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
 
     // Now identify the fields within this container
     const selects = studentContainer.querySelectorAll('select');
-    const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="password"])');
+    const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="password"])');
 
     // Filter inputs to only those that look like data fields (not search fields etc.)
     const dataInputs = Array.from(inputs).filter(inp => {
@@ -1202,14 +1279,18 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       }
     });
 
-    // Fallback to visual order if attributes didn't match everything
+    // Fallback to visual order if attributes didn't match everything uniquely
     if (dataInputs.length === 3) {
-      if (!marksInput) marksInput = dataInputs[0];
-      if (!percentInput) percentInput = dataInputs[1];
-      if (!daysInput) daysInput = dataInputs[2];
+      if (!marksInput || !percentInput || !daysInput || marksInput === percentInput || marksInput === daysInput || percentInput === daysInput) {
+        marksInput = dataInputs[0];
+        percentInput = dataInputs[1];
+        daysInput = dataInputs[2];
+      }
     } else if (dataInputs.length === 2) {
-      if (!percentInput) percentInput = dataInputs[0];
-      if (!daysInput) daysInput = dataInputs[1];
+      if (!percentInput || !daysInput || percentInput === daysInput) {
+        percentInput = dataInputs[0];
+        daysInput = dataInputs[1];
+      }
     } else if (dataInputs.length > 0) {
       if (!percentInput) percentInput = dataInputs[0];
     }
@@ -1320,10 +1401,10 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       let penElement = null;
       if (name) {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-        const searchName = name.toLowerCase();
+        const searchNameNormalized = name.toLowerCase().replace(/\s+/g, ' ').trim();
         while (walker.nextNode()) {
-          const nodeText = walker.currentNode.textContent.toLowerCase();
-          if (nodeText.trim() === searchName || (nodeText.includes(searchName) && nodeText.length < 100)) {
+          const nodeTextNormalized = walker.currentNode.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+          if (nodeTextNormalized === searchNameNormalized || (nodeTextNormalized.includes(searchNameNormalized) && nodeTextNormalized.length < 100)) {
             const el = walker.currentNode.parentElement;
             const style = window.getComputedStyle(el);
             const rect = el.getBoundingClientRect();
@@ -1345,7 +1426,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
         let attempts = 0;
         while (studentContainer && attempts < 15 && studentContainer.tagName !== 'BODY') {
           const selects = studentContainer.querySelectorAll('select');
-          const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type])');
+          const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input:not([type])');
           if (selects.length >= 1 && inputs.length >= 1 && inputs.length <= 8) {
             break;
           }
@@ -1358,7 +1439,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       studentContainer.id = 'bot-student-container-' + pen;
 
       const selects = studentContainer.querySelectorAll('select');
-      const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="password"])');
+      const inputs = studentContainer.querySelectorAll('input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="password"])');
       const dataInputs = Array.from(inputs).filter(inp => {
         const rect = inp.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
@@ -1401,12 +1482,16 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       });
 
       if (dataInputs.length === 3) {
-        if (!marksInput) marksInput = dataInputs[0];
-        if (!percentInput) percentInput = dataInputs[1];
-        if (!daysInput) daysInput = dataInputs[2];
+        if (!marksInput || !percentInput || !daysInput || marksInput === percentInput || marksInput === daysInput || percentInput === daysInput) {
+          marksInput = dataInputs[0];
+          percentInput = dataInputs[1];
+          daysInput = dataInputs[2];
+        }
       } else if (dataInputs.length === 2) {
-        if (!percentInput) percentInput = dataInputs[0];
-        if (!daysInput) daysInput = dataInputs[1];
+        if (!percentInput || !daysInput || percentInput === daysInput) {
+          percentInput = dataInputs[0];
+          daysInput = dataInputs[1];
+        }
       } else if (dataInputs.length > 0) {
         if (!percentInput) percentInput = dataInputs[0];
       }
@@ -1439,7 +1524,7 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     }
   }
 
-  if (semiAutomatic || elementInfo.hasCorrectionBtn) {
+  if (semiAutomatic) {
     let confirmData = {
       studentName: studentName,
       class: student.class || '',
@@ -1453,11 +1538,11 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
       alreadyEntered: !!elementInfo.hasCorrectionBtn
     };
 
-    log(`⏳ Waiting for user confirmation for ${studentName}...`);
+    log(`⏳ Waiting for user confirmation for ${studentName} (auto-confirms in 10s)...`);
     socket.emit('confirm-student', confirmData);
     
-    const response = await waitForStudentConfirmation(socket);
-    log(`👤 Confirmation response: action=${response.action}`);
+    const response = await waitForStudentConfirmation(socket, 10000, confirmData);
+    log(`👤 Confirmation response: action=${response.action}${response.autoConfirmed ? ' (auto-confirmed)' : ''}`);
     
     if (response.action === 'skip') {
       throw new Error('Skipped by user');
@@ -1535,16 +1620,30 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     }
 
     if (elementInfo.progressValue) {
-      await page.select(`#bot-progress-select-${pen}`, elementInfo.progressValue);
+      await page.evaluate((selId, val) => {
+        const select = document.getElementById(selId);
+        if (select) {
+          select.value = val;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, `bot-progress-select-${pen}`, elementInfo.progressValue);
       await delay(300);
     }
     if (elementInfo.schoolValue) {
-      await page.select(`#bot-school-select-${pen}`, elementInfo.schoolValue);
+      await page.evaluate((selId, val) => {
+        const select = document.getElementById(selId);
+        if (select) {
+          select.value = val;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, `bot-school-select-${pen}`, elementInfo.schoolValue);
       await delay(300);
     }
   }
 
   // Helper: Set input value
+  // Uses a careful sequence: focus → clear → type char-by-char → verify → force-fix
+  // Avoids page.type(selector, ...) which can drift to wrong element after Tab keypresses
   async function setInputValue(selector, value, fieldName) {
     const el = await page.$(selector);
     if (!el) {
@@ -1574,52 +1673,72 @@ async function processStudentOnPage(page, student, log, socket, semiAutomatic = 
     log(`  📝 ${fieldName}: type=${elState.type} readonly=${elState.readOnly} disabled=${elState.disabled} current="${elState.value}" → setting "${value}"`);
 
     try {
-      await page.focus(selector);
-      await delay(100);
-      
-      // Select all text using triple click (highly effective in all input types, including type="number")
+      // 1. Click to focus the exact element (triple-click selects all text)
       await page.click(selector, { clickCount: 3 });
       await delay(100);
-      
-      // Also try standard keyboard shortcut (Ctrl+A) to make absolutely sure all text is highlighted
+
+      // 2. Select all and delete existing content
       await page.keyboard.down('Control');
       await page.keyboard.press('a');
       await page.keyboard.up('Control');
-      await delay(100);
-      
-      // Delete the selection
+      await delay(50);
       await page.keyboard.press('Backspace');
-      await delay(150);
-      
-      // Double check if the field is cleared. If not (due to type="number" cursor issues in Chrome),
-      // we clear it programmatically and dispatch input/change events to update Angular state
-      const isCleared = await page.evaluate(sel => {
+      await delay(50);
+
+      // 3. Type the value using keyboard.type() — this sends keystrokes to the
+      //    currently focused element WITHOUT re-focusing (unlike page.type(selector))
+      await page.keyboard.type(value, { delay: 25 });
+      await delay(100);
+
+      // 4. Dispatch Angular-compatible events on the element
+      await page.evaluate((sel, val) => {
         const e = document.querySelector(sel);
-        return e ? e.value === '' : true;
+        if (e) {
+          // Only force-set if the DOM value diverged (some Angular forms override keyboard input)
+          if (e.value !== val) {
+            e.value = val;
+          }
+          e.dispatchEvent(new Event('input', { bubbles: true }));
+          e.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, selector, value);
+      await delay(50);
+
+      // 5. Tab out to trigger blur/validation
+      await page.evaluate(sel => {
+        const e = document.querySelector(sel);
+        if (e) e.dispatchEvent(new Event('blur', { bubbles: true }));
       }, selector);
-      
-      if (!isCleared) {
-        await page.evaluate(sel => {
+      await delay(100);
+
+      // 6. Final verification — if still wrong, do a hard programmatic override
+      const actual = await page.evaluate(sel => {
+        const e = document.querySelector(sel);
+        return e ? e.value : 'NOT_FOUND';
+      }, selector);
+
+      if (actual !== value) {
+        log(`  ⚠️ Value mismatch for ${fieldName}: got "${actual}", expected "${value}". Force-fixing...`, 'warn');
+        await page.evaluate((sel, val) => {
           const e = document.querySelector(sel);
           if (e) {
-            e.value = '';
+            // Use native setter to bypass Angular interceptors
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeSetter.call(e, val);
             e.dispatchEvent(new Event('input', { bubbles: true }));
             e.dispatchEvent(new Event('change', { bubbles: true }));
+            e.dispatchEvent(new Event('blur', { bubbles: true }));
           }
-        }, selector);
+        }, selector, value);
         await delay(100);
-      }
-      
-      // Type the new value natively so Angular form control validation and dirty checking is triggered
-      await page.type(selector, value, { delay: 50 });
-      await delay(100);
-      
-      await page.keyboard.press('Tab');
-      await delay(200);
-      
-      const actual = await page.evaluate(sel => document.querySelector(sel).value, selector);
-      if (actual !== value) {
-        log(`  ❌ Puppeteer type failed for ${fieldName}: expected "${value}" got "${actual}"`, 'error');
+
+        // Double-check after force fix
+        const actual2 = await page.evaluate(sel => document.querySelector(sel)?.value, selector);
+        if (actual2 !== value) {
+          log(`  ❌ CRITICAL: Could not set ${fieldName} to "${value}" (stuck at "${actual2}")`, 'error');
+        } else {
+          log(`  ✅ Force-fix successful for ${fieldName}`);
+        }
       }
     } catch (err) {
       log(`  ❌ Error typing into ${fieldName}: ${err.message}`, 'error');
@@ -1726,10 +1845,22 @@ function waitForCaptchaAnswer(socket, timeoutMs = 180000) {
 // STUDENT CONFIRMATION HELPERS
 // ========================
 
-function waitForStudentConfirmation(socket, timeoutMs = 300000) {
+function waitForStudentConfirmation(socket, timeoutMs = 10000, confirmData = null) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error('Student confirmation timeout — no response within 5 minutes'));
+      // Auto-confirm with the original data instead of rejecting
+      if (socket) socket.removeAllListeners('confirm-student-response');
+      // Close the modal on the frontend
+      if (socket) socket.emit('auto-confirm-close');
+      resolve({
+        action: 'submit',
+        marks: confirmData ? (confirmData.marks || '') : '',
+        percentage: confirmData ? (confirmData.percentage || '') : '',
+        attendance: confirmData ? (confirmData.attendance || '155') : '155',
+        progressionStatus: confirmData ? (confirmData.progressionStatus || 'Promoted') : 'Promoted',
+        sameSchool: confirmData ? (confirmData.sameSchool || 'Studying in Same School') : 'Studying in Same School',
+        autoConfirmed: true
+      });
     }, timeoutMs);
 
     const handler = (data) => {

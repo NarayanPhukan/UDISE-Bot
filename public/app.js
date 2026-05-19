@@ -1,6 +1,8 @@
 // ===== UDISE+ Bot Frontend =====
 const API = '';
 let socket, uploadedData, sessionId;
+let confirmCountdownTimer = null;
+let confirmCountdownSeconds = 0;
 
 // ---- Socket ----
 function initSocket() {
@@ -81,6 +83,9 @@ function initSocket() {
       imgContainer.classList.add('hidden');
     }
 
+    // Start 10-second countdown timer for auto-confirm
+    startConfirmCountdown(10);
+
     // Auto-focus and highlight the attendance days input field for seamless keyboard operation
     setTimeout(() => {
       const confDays = document.getElementById('confDays');
@@ -89,6 +94,13 @@ function initSocket() {
         confDays.select();
       }
     }, 100);
+  });
+  socket.on('auto-confirm-close', () => {
+    clearConfirmCountdown();
+    document.getElementById('confirmModal').classList.add('hidden');
+  });
+  socket.on('error-flash', (data) => {
+    showErrorFlash(data.studentName, data.message);
   });
   socket.on('complete', showResults);
   socket.on('error', (d) => {
@@ -213,6 +225,42 @@ document.getElementById('togglePw').addEventListener('click', () => {
   pw.type = pw.type === 'password' ? 'text' : 'password';
 });
 
+// ---- Section Selection Filter Toggles ----
+const btnChooseSection = document.getElementById('btnChooseSection');
+const sectionFilterContainer = document.getElementById('sectionFilterContainer');
+const btnApplySection = document.getElementById('btnApplySection');
+const targetSectionInput = document.getElementById('targetSectionInput');
+const selectedSectionBadge = document.getElementById('selectedSectionBadge');
+
+if (btnChooseSection && sectionFilterContainer) {
+  btnChooseSection.addEventListener('click', () => {
+    const isHidden = sectionFilterContainer.style.display === 'none' || sectionFilterContainer.style.display === '';
+    sectionFilterContainer.style.display = isHidden ? 'block' : 'none';
+    if (isHidden && targetSectionInput) {
+      targetSectionInput.focus();
+    }
+  });
+}
+
+if (btnApplySection && targetSectionInput && selectedSectionBadge) {
+  btnApplySection.addEventListener('click', () => {
+    const sec = targetSectionInput.value.trim();
+    if (sec) {
+      selectedSectionBadge.textContent = `Section ${sec.toUpperCase()}`;
+    } else {
+      selectedSectionBadge.textContent = 'All Sections';
+    }
+    sectionFilterContainer.style.display = 'none';
+  });
+
+  targetSectionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnApplySection.click();
+    }
+  });
+}
+
 // ---- Start Bot ----
 document.getElementById('btnStartBot').addEventListener('click', async () => {
   const code = document.getElementById('udiseCode').value.trim();
@@ -229,7 +277,8 @@ document.getElementById('btnStartBot').addEventListener('click', async () => {
         password: pass, 
         data: uploadedData.data,
         filePath: uploadedData.filePath,
-        semiAutomatic: document.getElementById('semiAutomatic').checked
+        semiAutomatic: document.getElementById('semiAutomatic').checked,
+        targetSection: targetSectionInput ? targetSectionInput.value.trim() : ''
       })
     });
     const r = await res.json();
@@ -293,6 +342,7 @@ document.getElementById('captchaInput').addEventListener('keydown', (e) => { if 
 
 // ---- Student Confirmation Submit ----
 function submitStudentConfirmation(action) {
+  clearConfirmCountdown();
   if (action === 'skip') {
     socket.emit('confirm-student-response', { action: 'skip' });
   } else {
@@ -312,6 +362,91 @@ function submitStudentConfirmation(action) {
     });
   }
   document.getElementById('confirmModal').classList.add('hidden');
+}
+
+// ---- Countdown Timer for Auto-Confirm ----
+function startConfirmCountdown(seconds) {
+  clearConfirmCountdown();
+  confirmCountdownSeconds = seconds;
+  const badge = document.getElementById('confirmCountdownBadge');
+  if (badge) {
+    badge.classList.remove('hidden');
+    badge.textContent = `Auto-confirm in ${confirmCountdownSeconds}s`;
+  }
+  confirmCountdownTimer = setInterval(() => {
+    confirmCountdownSeconds--;
+    if (badge) badge.textContent = `Auto-confirm in ${confirmCountdownSeconds}s`;
+    if (confirmCountdownSeconds <= 0) {
+      clearConfirmCountdown();
+    }
+  }, 1000);
+}
+
+function clearConfirmCountdown() {
+  if (confirmCountdownTimer) {
+    clearInterval(confirmCountdownTimer);
+    confirmCountdownTimer = null;
+  }
+  const badge = document.getElementById('confirmCountdownBadge');
+  if (badge) badge.classList.add('hidden');
+}
+
+// ---- Error Flash Toast ----
+function showErrorFlash(studentName, message) {
+  const existing = document.getElementById('errorFlashToast');
+  if (existing) existing.remove();
+  
+  const toast = document.createElement('div');
+  toast.id = 'errorFlashToast';
+  toast.className = 'error-flash-toast';
+  toast.innerHTML = `
+    <div class="flash-icon">⚠️</div>
+    <div class="flash-body">
+      <strong>${studentName || 'Error'}</strong>
+      <span>${message || 'An unknown error occurred'}</span>
+    </div>
+    <button class="flash-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  document.body.appendChild(toast);
+  // Auto-remove after 8 seconds
+  setTimeout(() => { if (toast.parentElement) toast.remove(); }, 8000);
+}
+
+// ---- Refresh Data File ----
+async function refreshFileData() {
+  if (!uploadedData || !uploadedData.filePath) {
+    alert('No file loaded to refresh.');
+    return;
+  }
+  // Re-fetch the preview from the already uploaded data
+  showFileData(uploadedData);
+  addLog({ message: 'File data refreshed.', type: 'info', timestamp: new Date().toISOString() });
+}
+
+// ---- Clear Memory of Entered Students ----
+async function clearEnteredMemory() {
+  try {
+    const res = await fetch(API + '/api/clear-memory', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      addLog({ message: `🧹 ${data.message}`, type: 'info', timestamp: new Date().toISOString() });
+      alert(data.message);
+      updateMemoryCount();
+    }
+  } catch (err) {
+    alert('Failed to clear memory: ' + err.message);
+  }
+}
+
+async function updateMemoryCount() {
+  try {
+    const res = await fetch(API + '/api/memory-count');
+    const data = await res.json();
+    const badge = document.getElementById('memoryCountBadge');
+    if (badge) {
+      badge.textContent = data.count > 0 ? `${data.count} students remembered` : 'No students in memory';
+    }
+  } catch (e) { /* ignore */ }
 }
 
 document.getElementById('confirmSubmitBtn').addEventListener('click', () => submitStudentConfirmation('submit'));
@@ -505,6 +640,7 @@ function showResults(r) {
 // ---- Init ----
 initSocket();
 initParticles();
+updateMemoryCount();
 
 // ---- Premium Particle Background ----
 function initParticles() {

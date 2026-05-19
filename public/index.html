@@ -123,6 +123,9 @@
               <h4 id="fileName">—</h4>
               <span id="fileRowCount">0 records</span>
             </div>
+            <button class="icon-btn" id="refreshFileBtn" title="Refresh data" onclick="refreshFileData()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
             <button class="icon-btn" id="removeFileBtn" title="Remove">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
@@ -199,9 +202,37 @@
               <span style="font-size: 13px; color: var(--text-main);"><strong>Semi-Automatic Mode</strong> (Verify/edit student data before submitting)</span>
             </label>
           </div>
+          <div class="form-field" style="margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+              <button class="btn btn-outline" id="btnChooseSection" type="button" style="padding: 8px 14px; font-size: 12px; border-radius: 6px; display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); margin: 0; min-height: unset; height: 32px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                TARGET SECTION
+              </button>
+              <div style="font-size: 13px; color: var(--text-main);">
+                Selected: <strong id="selectedSectionBadge" style="color: var(--accent);">All Sections</strong>
+              </div>
+            </div>
+            <div id="sectionFilterContainer" style="display: none; padding: 12px; border-radius: 8px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); animation: fadeUp 0.3s ease;">
+              <label for="targetSectionInput" style="font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Specify Section Name</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="targetSectionInput" placeholder="e.g., A, B, C (Leave empty for All)" style="flex: 1; padding: 8px 12px; font-size: 13px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: var(--text-main); font-family: inherit; outline: none; transition: border-color 0.2s;">
+                <button class="btn btn-primary" id="btnApplySection" type="button" style="padding: 0 16px; font-size: 12px; border-radius: 6px; height: 36px; margin: 0;">APPLY</button>
+              </div>
+            </div>
+          </div>
           <div class="security-badge">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             <span>Credentials used for this session only — never stored.</span>
+          </div>
+          <div class="memory-control" style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 8px; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.06);">
+            <div style="display:flex; flex-direction:column; gap:2px;">
+              <span style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">Student Memory</span>
+              <span id="memoryCountBadge" style="font-size:12px; color:var(--text-main);">Checking...</span>
+            </div>
+            <button class="btn btn-outline" onclick="clearEnteredMemory()" type="button" style="padding:6px 12px; font-size:11px; border-radius:6px; margin:0; min-height:unset; height:28px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              CLEAR MEMORY
+            </button>
           </div>
         </div>
         <div class="panel-actions">
@@ -353,6 +384,7 @@
                     <strong>Confirm Student Data</strong>
                     <p>Verify or modify student progression details before submitting to UDISE+</p>
                   </div>
+                  <span id="confirmCountdownBadge" class="countdown-badge hidden" style="margin-left:auto;">Auto-confirm in 10s</span>
                 </div>
                 
                 <div class="student-info-summary">
